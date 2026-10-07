@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- 思源宋体（public/fonts，css 内相对路径自包含）
+         非阻塞加载：css 含 3000+ 行 @font-face/306 个 woff2 子集，同步加载会阻塞首屏；
+         media=print 先不生效、onload 切回 all（首屏用系统字体，字体到位后替换，FOUT 可接受）。 -->
+    <link rel="stylesheet" href="/fonts/noto-serif-sc.css" media="print" onload="this.media='all'" />
+    <noscript><link rel="stylesheet" href="/fonts/noto-serif-sc.css" /></noscript>
+    <title>AniTexas 动画德州</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

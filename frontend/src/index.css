@@ -1,0 +1,347 @@
+/* AniTexas 前端 —— 樱墨设计 token（移植自 docs/rules.html <style>，A5.1）
+   约定：颜色变量一律存 "R G B" 三元组，消费方统一走
+   rgb(var(--color-x) / <alpha>)（tailwind.config.js 已映射成类名）；
+   组件代码禁止出现裸色值。
+   字体：思源宋体从 public/fonts 运行时载入（index.html <link>），
+   不走 CSS @import——避免 vite 二次打包出哈希副本。 */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-ink: 51 22 42;
+  --color-ink-deep: 38 15 31;
+  --color-gold: 248 176 200;
+  --color-gold-light: 253 216 232;
+  --color-gold-dark: 240 144 176;
+  --color-surface: 95 48 73;
+  --color-surface-elevated: 116 58 88;
+  --color-muted: 232 192 212;
+  --color-body-text: 254 248 250;
+  --color-gold-foil: 212 167 106;
+  --color-danger: 240 120 130;
+  --color-success: 168 214 170;
+}
+
+@layer base {
+  /* 基础底色设在 html：滚动时画布色稳定（body::before 的固定渐变叠在其上）。 */
+  html {
+    background-color: rgb(var(--color-ink));
+  }
+  body {
+    @apply font-sans text-body-text;
+    font-size: 16px;
+    line-height: 1.75;
+    margin: 0;
+  }
+  /* 页面墨底渐变固定在视口（合成层，不随滚动重绘）——替代 background-attachment: fixed，
+     后者会让每个滚动帧都做全视口重绘，是动画/滚动掉帧的主因。
+     渐变色值与 tailwind.config.js 的 backgroundImage.ink-page 保持一致。 */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      radial-gradient(1100px 460px at 88% -8%, rgb(var(--color-gold-foil) / 0.10), transparent 60%),
+      radial-gradient(820px 420px at -8% 10%, rgb(var(--color-gold) / 0.07), transparent 55%),
+      linear-gradient(180deg, rgb(var(--color-ink)) 0%, rgb(var(--color-ink-deep)) 100%);
+  }
+  /* 全站统一左基准线（A5.6）：内容列 1120px 居中，两侧留白一致 */
+  ::selection {
+    @apply bg-gold/30 text-body-text;
+  }
+
+  /* 窄屏横滑区的滚动条轻量主题化：樱粉细条、透明轨道（token 驱动，克制不喧宾夺主） */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--color-gold) / 0.25) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--color-gold) / 0.25);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--color-gold) / 0.45);
+  }
+}
+
+/* 展开动画 250ms（A5.2）：要素区高度/透明度过渡；reduced-motion 直出终态。
+   注：max-height 是全站唯一的 layout 过渡例外——它是「展开动画 250ms」契约的
+   实现载体、作用域限单个小容器，已经 A5 视觉验收裁决保留（不换 scaleY/clip-path）。 */
+.reveal-expand {
+  overflow: hidden;
+  transition:
+    max-height 250ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 250ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 250ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ===== 桌感动效（D15）：克制、短促、token 化 ===== */
+
+/* 发牌飞入 */
+.animate-deal-in {
+  animation: dealIn 320ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes dealIn {
+  0% {
+    opacity: 0;
+    transform: translateY(16px) rotate(-2deg) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 筹码/底池跳动 */
+.animate-chip-pop {
+  animation: chipPop 260ms ease-out;
+}
+@keyframes chipPop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* 表情气泡：弹出、停留、4s 自隐（fill forwards 停在透明，不占交互） */
+.animate-emote-pop {
+  animation: emotePop 4s ease-out forwards;
+}
+@keyframes emotePop {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.7);
+  }
+  8% {
+    opacity: 1;
+    transform: translateY(0) scale(1.08);
+  }
+  14% {
+    transform: scale(1);
+  }
+  82% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.9);
+  }
+}
+
+/* 赢家描金呼吸：光晕做在伪元素上、只动 opacity（合成器层，不动 box-shadow/宽高） */
+.animate-winner-glow {
+  position: relative;
+}
+.animate-winner-glow::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  box-shadow: 0 0 22px rgb(var(--color-gold-foil) / 0.28);
+  animation: winnerGlow 2.2s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes winnerGlow {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 顶级牌型全桌特效（合奏以上）：金幕 + 星屑 */
+.tier-veil {
+  animation: tierVeil 2.8s ease-out forwards;
+}
+@keyframes tierVeil {
+  0% {
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.tier-spark {
+  animation: tierSpark 2.8s ease-out forwards;
+}
+@keyframes tierSpark {
+  0% {
+    opacity: 0;
+    transform: translateY(-28px) scale(0.6);
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(130px) scale(1);
+  }
+}
+
+/* ===== 牌桌 v2 动效 ===== */
+
+/* 发牌：从桌心飞向座位（点内位移 + 轻微旋转） */
+.animate-deal-v2 {
+  animation: dealV2 var(--deal-dur, 420ms) cubic-bezier(0.34, 1.4, 0.64, 1) both;
+  animation-delay: var(--deal-delay, 0ms);
+}
+@keyframes dealV2 {
+  0% {
+    opacity: 0;
+    transform: translate(-12%, -46%) rotate(-9deg) scale(0.9);
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 筹码飞行：座位 → 底池 / 底池 → 赢家（位移由 --fly-x/--fly-y 给出） */
+.animate-chip-fly {
+  animation: chipFly 380ms cubic-bezier(0.3, 0.8, 0.4, 1) both;
+}
+@keyframes chipFly {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.7);
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: translate(var(--fly-x, 0), var(--fly-y, 0)) scale(1);
+  }
+}
+
+/* 全下推筹码 */
+.animate-shove {
+  animation: shove 520ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes shove {
+  0% {
+    transform: translateY(0) scale(1);
+  }
+  40% {
+    transform: translateY(-6px) scale(1.16);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 赢家扫光：沿桌沿跑一圈 */
+.animate-sweep {
+  animation: sweep 1.6s linear both;
+}
+@keyframes sweep {
+  0% {
+    opacity: 0;
+    transform: rotate(0deg);
+  }
+  12%,
+  88% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(360deg);
+  }
+}
+
+/* 动作徽章：出现后 2.5s 淡出 */
+.animate-badge {
+  animation: badgeFade 2.5s ease-out both;
+}
+@keyframes badgeFade {
+  0% {
+    opacity: 0;
+    transform: translateY(4px) scale(0.9);
+  }
+  12% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  78% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+}
+
+/* 金箔扫光（高档次牌面） */
+.animate-foil {
+  animation: foilSheen 2.8s ease-in-out infinite;
+}
+@keyframes foilSheen {
+  0% {
+    transform: translateX(-130%) skewX(-18deg);
+  }
+  100% {
+    transform: translateX(230%) skewX(-18deg);
+  }
+}
+
+/* 行动者头像脉冲（外扩光圈） */
+.animate-seat-pulse {
+  animation: seatPulse 1.8s ease-out infinite;
+}
+@keyframes seatPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(var(--color-gold-foil) / 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgb(var(--color-gold-foil) / 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal-expand {
+    transition: none;
+  }
+  /* 减动效：跳过位移/光效，保留信息可见性（气泡淡出保留，含信息） */
+  .animate-deal-in,
+  .animate-chip-pop,
+  .animate-winner-glow,
+  .tier-veil,
+  .tier-spark,
+  .animate-deal-v2,
+  .animate-chip-fly,
+  .animate-shove,
+  .animate-sweep,
+  .animate-badge,
+  .animate-foil,
+  .animate-seat-pulse {
+    animation: none;
+  }
+}

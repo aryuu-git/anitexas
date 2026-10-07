@@ -1,0 +1,144 @@
+# AniTexas 标签黑名单词表（P4 筛子二「太格式化」）
+# 版本: v1
+# 说明: 词表属于配置不属于代码（architecture.md §4.6 注）。build_cards.py 每次运行会把版本号写进
+#       data/pipeline-report.md，词表改动必须 +版本号。
+# 集合内容参考 bak/anitexas-verify.py（原型）的 FMT / TYPE_FORM / PERSON_NAMES / STUDIO_ALIASES。
+#
+# 格式:
+#   「# ==== 类别 ====」开启一个类别；类别只有四个: 格式标签 / 年份形式 / 公司名·人名 / 原作类型形式
+#   「#」开头与空行忽略
+#   年份形式  -> 正则（对标签整串 fullmatch）
+#   公司名    -> 「别名=规范名」；标签命中任一别名即剔除（归入「公司名·人名」），
+#                制作公司字段命中别名则归一为规范名（京阿尼=京都动画一类）
+#   人名      -> 裸词条；标签命中即剔除（与公司名同属「公司名·人名」类）
+#   原作类型  -> 「原始形式=五值归一名」；标签命中即剔除（归入「原作类型形式」），
+#                meta 标签/标签命中同一词表时按五值归一产生原作类型要素
+#
+# ==== 格式标签 ====
+TV
+WEB
+OVA
+OAD
+剧场版
+短片
+泡面番
+总集篇
+SP
+日本
+动画
+动画片
+未定档
+未保存
+表内
+里番
+同人
+3D
+广告
+MV
+PV
+完结
+电影
+
+# ==== 年份形式 ====
+\d{4}
+\d{4}年.*
+
+# ==== 公司名·人名 ====
+## 公司名（别名=规范名）
+京都アニメーション=京都动画
+京阿尼=京都动画
+京都动画=京都动画
+KyotoAnimation=京都动画
+BONES=BONES
+骨头社=BONES
+ボンズ=BONES
+ufotable=ufotable
+ユーフォテーブル=ufotable
+WITSTUDIO=WIT STUDIO
+WIT STUDIO=WIT STUDIO
+ウィットスタジオ=WIT STUDIO
+MAPPA=MAPPA
+マッパ=MAPPA
+A-1Pictures=A-1 Pictures
+A-1 Pictures=A-1 Pictures
+A-1=A-1 Pictures
+WHITEFOX=WHITE FOX
+WHITE FOX=WHITE FOX
+SHAFT=SHAFT
+シャフト=SHAFT
+ProductionI.G=Production I.G
+Production I.G=Production I.G
+Production.I.G=Production I.G
+MADHouse=MADHOUSE
+MADHOUSE=MADHOUSE
+マッドハウス=MADHOUSE
+CoMixWave=CoMix Wave Films
+CoMix Wave Films=CoMix Wave Films
+コミックス・ウェーブ=CoMix Wave Films
+CloverWorks=CloverWorks
+クローバーワークス=CloverWorks
+吉卜力=吉卜力
+スタジオジブリ=吉卜力
+Ghibli=吉卜力
+P.A.WORKS=P.A.WORKS
+## 人名
+新海诚
+新海誠
+石原立也
+山田尚子
+石立太一
+入江泰浩
+立川譲
+立川让
+佐藤卓哉
+塩谷直義
+荒木哲郎
+三浦貴博
+夏目真悟
+高畑勲
+高畑勋
+伊藤智彦
+虚渊玄
+虚淵玄
+荒川弘
+谷川流
+諫山創
+ONE
+吾峠呼世晴
+暁佳奈
+かきふらい
+麻枝准
+新房昭之
+梶浦由紀
+梶浦由記
+久石让
+泽野弘之
+藤本树
+松本零士
+赤坂アカ
+花泽香菜
+天野明
+川原砾
+川原礫
+田中将賀
+细田守
+細田守
+河野亜矢子
+贞本义行
+貞本義行
+松岡禎丞
+松冈祯丞
+
+# ==== 原作类型形式 ====
+# 五值归一名只允许: 原创 / 漫改 / 轻改 / 游戏改 / 其他（规则书 §3）
+原创=原创
+漫画改=漫改
+漫改=漫改
+轻小说改=轻改
+轻改=轻改
+小说改=轻改
+游戏改=游戏改
+GAL改=游戏改
+特摄改=其他
+音乐改=其他
+电视剧改=其他

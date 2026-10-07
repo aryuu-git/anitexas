@@ -1,0 +1,897 @@
+{
+ "note": "黄金十手要素集快照：由 scripts/verify_hands.py --export-fixture 导出（要素集由管线产物 data/cards.json 提供，architecture.md §4.1），转存为本文件；测试运行不依赖 Python。",
+ "cards": [
+  {
+   "id": 51,
+   "key": "CLANNAD",
+   "title": "CLANNAD",
+   "score": 8.4,
+   "bucket": 8.5,
+   "year": 2007,
+   "elements": [
+    {
+     "class": 1,
+     "value": "石原立也"
+    },
+    {
+     "class": 2,
+     "value": "京都动画"
+    },
+    {
+     "class": 3,
+     "value": "Clannad"
+    },
+    {
+     "class": 3,
+     "value": "key"
+    },
+    {
+     "class": 3,
+     "value": "催泪"
+    },
+    {
+     "class": 3,
+     "value": "団子大家族"
+    },
+    {
+     "class": 3,
+     "value": "治愈"
+    },
+    {
+     "class": 3,
+     "value": "神作"
+    },
+    {
+     "class": 3,
+     "value": "人生"
+    },
+    {
+     "class": 4,
+     "value": "2007"
+    },
+    {
+     "class": 5,
+     "value": "游戏改"
+    }
+   ]
+  },
+  {
+   "id": 876,
+   "key": "CLANNAD_AS",
+   "title": "CLANNAD 〜AFTER STORY〜",
+   "score": 9.2,
+   "bucket": 9.0,
+   "year": 2008,
+   "elements": [
+    {
+     "class": 1,
+     "value": "石原立也"
+    },
+    {
+     "class": 2,
+     "value": "京都动画"
+    },
+    {
+     "class": 3,
+     "value": "Clannad"
+    },
+    {
+     "class": 3,
+     "value": "催泪"
+    },
+    {
+     "class": 3,
+     "value": "key"
+    },
+    {
+     "class": 3,
+     "value": "神作"
+    },
+    {
+     "class": 3,
+     "value": "治愈"
+    },
+    {
+     "class": 3,
+     "value": "人生"
+    },
+    {
+     "class": 3,
+     "value": "~After-Story~"
+    },
+    {
+     "class": 3,
+     "value": "治愈系"
+    },
+    {
+     "class": 4,
+     "value": "2008"
+    },
+    {
+     "class": 5,
+     "value": "游戏改"
+    }
+   ]
+  },
+  {
+   "id": 95225,
+   "key": "Fate/stay night [Unlimited",
+   "title": "Fate/stay night [Unlimited Blade Works]",
+   "score": 7.5,
+   "bucket": 7.5,
+   "year": 2014,
+   "elements": [
+    {
+     "class": 1,
+     "value": "三浦貴博"
+    },
+    {
+     "class": 2,
+     "value": "ufotable"
+    },
+    {
+     "class": 3,
+     "value": "Type-Moon"
+    },
+    {
+     "class": 3,
+     "value": "Fate"
+    },
+    {
+     "class": 3,
+     "value": "战斗"
+    },
+    {
+     "class": 3,
+     "value": "UBW"
+    },
+    {
+     "class": 3,
+     "value": "奇幻"
+    },
+    {
+     "class": 3,
+     "value": "FateStayNight"
+    },
+    {
+     "class": 4,
+     "value": "2014"
+    },
+    {
+     "class": 5,
+     "value": "游戏改"
+    }
+   ]
+  },
+  {
+   "id": 147359,
+   "key": "一拳超人",
+   "title": "一拳超人 OAD",
+   "score": 6.9,
+   "bucket": 7.0,
+   "year": 2015,
+   "elements": [
+    {
+     "class": 1,
+     "value": "夏目真悟"
+    },
+    {
+     "class": 2,
+     "value": "MADHOUSE"
+    },
+    {
+     "class": 3,
+     "value": "一拳超人"
+    },
+    {
+     "class": 3,
+     "value": "搞笑"
+    },
+    {
+     "class": 3,
+     "value": "战斗"
+    },
+    {
+     "class": 3,
+     "value": "热血"
+    },
+    {
+     "class": 4,
+     "value": "2015"
+    },
+    {
+     "class": 5,
+     "value": "漫改"
+    }
+   ]
+  },
+  {
+   "id": 160209,
+   "key": "你的名字",
+   "title": "你的名字。",
+   "score": 8.1,
+   "bucket": 8.0,
+   "year": 2016,
+   "elements": [
+    {
+     "class": 1,
+     "value": "新海誠"
+    },
+    {
+     "class": 2,
+     "value": "CoMix Wave Films"
+    },
+    {
+     "class": 3,
+     "value": "恋爱"
+    },
+    {
+     "class": 3,
+     "value": "奇幻"
+    },
+    {
+     "class": 3,
+     "value": "动画电影"
+    },
+    {
+     "class": 3,
+     "value": "君の名は。"
+    },
+    {
+     "class": 3,
+     "value": "君の名は"
+    },
+    {
+     "class": 4,
+     "value": "2016"
+    },
+    {
+     "class": 5,
+     "value": "原创"
+    }
+   ]
+  },
+  {
+   "id": 485,
+   "key": "凉宫春日的忧郁",
+   "title": "凉宫春日的忧郁",
+   "score": 8.2,
+   "bucket": 8.0,
+   "year": 2006,
+   "elements": [
+    {
+     "class": 1,
+     "value": "石原立也"
+    },
+    {
+     "class": 2,
+     "value": "京都动画"
+    },
+    {
+     "class": 3,
+     "value": "涼宮ハルヒの憂鬱"
+    },
+    {
+     "class": 3,
+     "value": "SOS团"
+    },
+    {
+     "class": 3,
+     "value": "校园"
+    },
+    {
+     "class": 3,
+     "value": "团长"
+    },
+    {
+     "class": 3,
+     "value": "凉宫春日的忧郁"
+    },
+    {
+     "class": 3,
+     "value": "吐槽"
+    },
+    {
+     "class": 4,
+     "value": "2006"
+    },
+    {
+     "class": 5,
+     "value": "轻改"
+    }
+   ]
+  },
+  {
+   "id": 10380,
+   "key": "命运石之门",
+   "title": "命运石之门",
+   "score": 8.8,
+   "bucket": 9.0,
+   "year": 2011,
+   "elements": [
+    {
+     "class": 1,
+     "value": "佐藤卓哉"
+    },
+    {
+     "class": 1,
+     "value": "浜崎博嗣"
+    },
+    {
+     "class": 2,
+     "value": "WHITE FOX"
+    },
+    {
+     "class": 3,
+     "value": "科幻"
+    },
+    {
+     "class": 3,
+     "value": "中二病"
+    },
+    {
+     "class": 3,
+     "value": "牧瀬紅莉栖"
+    },
+    {
+     "class": 3,
+     "value": "嘟嘟噜"
+    },
+    {
+     "class": 3,
+     "value": "空想科学"
+    },
+    {
+     "class": 3,
+     "value": "Nitro+"
+    },
+    {
+     "class": 4,
+     "value": "2011"
+    },
+    {
+     "class": 5,
+     "value": "游戏改"
+    }
+   ]
+  },
+  {
+   "id": 117777,
+   "key": "声之形",
+   "title": "声之形",
+   "score": 7.1,
+   "bucket": 7.0,
+   "year": 2016,
+   "elements": [
+    {
+     "class": 1,
+     "value": "山田尚子"
+    },
+    {
+     "class": 2,
+     "value": "京都动画"
+    },
+    {
+     "class": 3,
+     "value": "声之形"
+    },
+    {
+     "class": 3,
+     "value": "校园"
+    },
+    {
+     "class": 3,
+     "value": "治愈"
+    },
+    {
+     "class": 3,
+     "value": "恋爱"
+    },
+    {
+     "class": 4,
+     "value": "2016"
+    },
+    {
+     "class": 5,
+     "value": "漫改"
+    }
+   ]
+  },
+  {
+   "id": 511876,
+   "key": "大和号永恒不灭",
+   "title": "宇宙战舰大和号2 大和号永恒不灭",
+   "score": 8.0,
+   "bucket": 8.0,
+   "year": 1979,
+   "elements": [
+    {
+     "class": 4,
+     "value": "1979"
+    },
+    {
+     "class": 5,
+     "value": "其他"
+    }
+   ]
+  },
+  {
+   "id": 269235,
+   "key": "天气之子",
+   "title": "天气之子",
+   "score": 7.2,
+   "bucket": 7.0,
+   "year": 2019,
+   "elements": [
+    {
+     "class": 1,
+     "value": "新海誠"
+    },
+    {
+     "class": 2,
+     "value": "CoMix Wave Films"
+    },
+    {
+     "class": 3,
+     "value": "恋爱"
+    },
+    {
+     "class": 3,
+     "value": "奇幻"
+    },
+    {
+     "class": 3,
+     "value": "动画电影"
+    },
+    {
+     "class": 3,
+     "value": "青春"
+    },
+    {
+     "class": 4,
+     "value": "2019"
+    },
+    {
+     "class": 5,
+     "value": "原创"
+    }
+   ]
+  },
+  {
+   "id": 37685,
+   "key": "心理测量者",
+   "title": "心理测量者",
+   "score": 7.9,
+   "bucket": 8.0,
+   "year": 2012,
+   "elements": [
+    {
+     "class": 1,
+     "value": "塩谷直義"
+    },
+    {
+     "class": 2,
+     "value": "Production I.G"
+    },
+    {
+     "class": 3,
+     "value": "科幻"
+    },
+    {
+     "class": 3,
+     "value": "PSYCHO-PASS"
+    },
+    {
+     "class": 3,
+     "value": "爱的战士"
+    },
+    {
+     "class": 4,
+     "value": "2012"
+    },
+    {
+     "class": 5,
+     "value": "原创"
+    }
+   ]
+  },
+  {
+   "id": 150955,
+   "key": "我的英雄学院",
+   "title": "我的英雄学院",
+   "score": 6.4,
+   "bucket": 6.5,
+   "year": 2016,
+   "elements": [
+    {
+     "class": 1,
+     "value": "長崎健司"
+    },
+    {
+     "class": 2,
+     "value": "BONES"
+    },
+    {
+     "class": 3,
+     "value": "热血"
+    },
+    {
+     "class": 3,
+     "value": "战斗"
+    },
+    {
+     "class": 3,
+     "value": "JUMP"
+    },
+    {
+     "class": 3,
+     "value": "我的英雄学院"
+    },
+    {
+     "class": 3,
+     "value": "校园"
+    },
+    {
+     "class": 4,
+     "value": "2016"
+    },
+    {
+     "class": 5,
+     "value": "漫改"
+    }
+   ]
+  },
+  {
+   "id": 171068,
+   "key": "文豪野犬",
+   "title": "文豪野犬 第二季",
+   "score": 6.8,
+   "bucket": 7.0,
+   "year": 2016,
+   "elements": [
+    {
+     "class": 1,
+     "value": "五十嵐卓哉"
+    },
+    {
+     "class": 2,
+     "value": "BONES"
+    },
+    {
+     "class": 3,
+     "value": "战斗"
+    },
+    {
+     "class": 3,
+     "value": "文豪野犬"
+    },
+    {
+     "class": 3,
+     "value": "奇幻"
+    },
+    {
+     "class": 3,
+     "value": "超能力"
+    },
+    {
+     "class": 4,
+     "value": "2016"
+    },
+    {
+     "class": 5,
+     "value": "漫改"
+    }
+   ]
+  },
+  {
+   "id": 158316,
+   "key": "灵能百分百",
+   "title": "灵能百分百",
+   "score": 7.8,
+   "bucket": 8.0,
+   "year": 2016,
+   "elements": [
+    {
+     "class": 1,
+     "value": "立川譲"
+    },
+    {
+     "class": 2,
+     "value": "BONES"
+    },
+    {
+     "class": 3,
+     "value": "搞笑"
+    },
+    {
+     "class": 3,
+     "value": "热血"
+    },
+    {
+     "class": 3,
+     "value": "战斗"
+    },
+    {
+     "class": 3,
+     "value": "灵能百分百"
+    },
+    {
+     "class": 4,
+     "value": "2016"
+    },
+    {
+     "class": 5,
+     "value": "漫改"
+    }
+   ]
+  },
+  {
+   "id": 183878,
+   "key": "紫罗兰永恒花园",
+   "title": "紫罗兰永恒花园",
+   "score": 7.6,
+   "bucket": 7.5,
+   "year": 2018,
+   "elements": [
+    {
+     "class": 1,
+     "value": "石立太一"
+    },
+    {
+     "class": 2,
+     "value": "京都动画"
+    },
+    {
+     "class": 3,
+     "value": "紫罗兰永恒花园"
+    },
+    {
+     "class": 3,
+     "value": "治愈"
+    },
+    {
+     "class": 3,
+     "value": "奇幻"
+    },
+    {
+     "class": 4,
+     "value": "2018"
+    },
+    {
+     "class": 5,
+     "value": "轻改"
+    }
+   ]
+  },
+  {
+   "id": 1424,
+   "key": "轻音少女",
+   "title": "轻音少女",
+   "score": 8.3,
+   "bucket": 8.5,
+   "year": 2009,
+   "elements": [
+    {
+     "class": 1,
+     "value": "山田尚子"
+    },
+    {
+     "class": 2,
+     "value": "京都动画"
+    },
+    {
+     "class": 3,
+     "value": "K-ON!"
+    },
+    {
+     "class": 3,
+     "value": "校园"
+    },
+    {
+     "class": 3,
+     "value": "轻音"
+    },
+    {
+     "class": 3,
+     "value": "萌"
+    },
+    {
+     "class": 3,
+     "value": "治愈"
+    },
+    {
+     "class": 3,
+     "value": "日常"
+    },
+    {
+     "class": 3,
+     "value": "废萌"
+    },
+    {
+     "class": 4,
+     "value": "2009"
+    },
+    {
+     "class": 5,
+     "value": "漫改"
+    }
+   ]
+  },
+  {
+   "id": 3774,
+   "key": "轻音少女 第二季",
+   "title": "轻音少女 第二季",
+   "score": 8.4,
+   "bucket": 8.5,
+   "year": 2010,
+   "elements": [
+    {
+     "class": 1,
+     "value": "山田尚子"
+    },
+    {
+     "class": 2,
+     "value": "京都动画"
+    },
+    {
+     "class": 3,
+     "value": "校园"
+    },
+    {
+     "class": 3,
+     "value": "萌"
+    },
+    {
+     "class": 3,
+     "value": "K-ON!"
+    },
+    {
+     "class": 3,
+     "value": "治愈"
+    },
+    {
+     "class": 3,
+     "value": "日常"
+    },
+    {
+     "class": 3,
+     "value": "轻音"
+    },
+    {
+     "class": 3,
+     "value": "K-on!2"
+    },
+    {
+     "class": 4,
+     "value": "2010"
+    },
+    {
+     "class": 5,
+     "value": "漫改"
+    }
+   ]
+  },
+  {
+   "id": 56847,
+   "key": "辉夜姬物语",
+   "title": "辉夜姬物语",
+   "score": 8.1,
+   "bucket": 8.0,
+   "year": 2013,
+   "elements": [
+    {
+     "class": 1,
+     "value": "高畑勲"
+    },
+    {
+     "class": 2,
+     "value": "吉卜力"
+    },
+    {
+     "class": 3,
+     "value": "治愈"
+    },
+    {
+     "class": 3,
+     "value": "辉夜姬物语"
+    },
+    {
+     "class": 3,
+     "value": "动画电影"
+    },
+    {
+     "class": 4,
+     "value": "2013"
+    },
+    {
+     "class": 5,
+     "value": "轻改"
+    }
+   ]
+  },
+  {
+   "id": 55770,
+   "key": "进击的巨人",
+   "title": "进击的巨人",
+   "score": 8.2,
+   "bucket": 8.0,
+   "year": 2013,
+   "elements": [
+    {
+     "class": 1,
+     "value": "荒木哲郎"
+    },
+    {
+     "class": 2,
+     "value": "WIT STUDIO"
+    },
+    {
+     "class": 3,
+     "value": "进击的巨人"
+    },
+    {
+     "class": 3,
+     "value": "热血"
+    },
+    {
+     "class": 3,
+     "value": "战斗"
+    },
+    {
+     "class": 4,
+     "value": "2013"
+    },
+    {
+     "class": 5,
+     "value": "漫改"
+    }
+   ]
+  },
+  {
+   "id": 1428,
+   "key": "钢之炼金术师 FULLMETAL",
+   "title": "钢之炼金术师 FULLMETAL ALCHEMIST",
+   "score": 8.8,
+   "bucket": 9.0,
+   "year": 2009,
+   "elements": [
+    {
+     "class": 1,
+     "value": "入江泰浩"
+    },
+    {
+     "class": 2,
+     "value": "BONES"
+    },
+    {
+     "class": 3,
+     "value": "钢之炼金术师"
+    },
+    {
+     "class": 3,
+     "value": "热血"
+    },
+    {
+     "class": 3,
+     "value": "等价交换"
+    },
+    {
+     "class": 3,
+     "value": "钢炼"
+    },
+    {
+     "class": 3,
+     "value": "战斗"
+    },
+    {
+     "class": 4,
+     "value": "2009"
+    },
+    {
+     "class": 5,
+     "value": "漫改"
+    }
+   ]
+  }
+ ]
+}

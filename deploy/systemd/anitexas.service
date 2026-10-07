@@ -1,0 +1,37 @@
+# anitexas game-server 服务单元
+# 部署到：/etc/systemd/system/anitexas.service，然后 systemctl daemon-reload
+# 日志进 journald（见下方 StandardOutput），查看：journalctl -u anitexas -f
+
+[Unit]
+Description=AniTexas Game Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=anitexas
+Group=anitexas
+# 工作目录指向当前发布指针：二进制、cards.json、dist 同包同版本
+WorkingDirectory=/opt/anitexas/current
+EnvironmentFile=/opt/anitexas/shared/anitexas.env
+ExecStart=/opt/anitexas/current/anitexas-server
+
+# 重启策略：异常退出 3 秒后拉起；收到 SIGTERM 给足收尾时间（对局状态由动作日志可回放）
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=35
+KillSignal=SIGTERM
+
+# 日志：全部进 journald，用 SyslogIdentifier 便于过滤
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=anitexas
+
+# 沙箱收紧：系统目录只读，仅数据目录可写（DB / 备份落 /data/anitexas）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/data/anitexas
+
+[Install]
+WantedBy=multi-user.target

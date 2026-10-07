@@ -1,0 +1,35 @@
+# 产物统一输出到 data/（cards.json、SQLite、后端二进制、前端 dist）
+data/
+*.exe
+*.db
+*.db-shm
+*.db-wal
+
+# Go 编译产物 / 测试二进制
+backend/anitexas-server
+*.test
+*.out
+
+# 发布打包产物（build-release.sh 输出：release/ 暂存 + tar.zst + 校验和）
+release/
+anitexas-*.tar.zst
+anitexas-*.tar.zst.sha256
+
+# npm 依赖、构建产物与缓存
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+# vite 临时时间戳配置
+frontend/vite.config.ts.timestamp-*.mjs
+
+# Python 管线缓存
+__pycache__/
+*.py[cod]
+
+# 环境变量 / 密钥（模板 deploy/anitexas.env.example 需提交）
+.env
+.env.local
+.env.*
+*.env
+*.env.*
+!*.env.example
