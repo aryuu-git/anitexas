@@ -156,6 +156,10 @@ func (g *Game) applyAction(a Action) error {
 			return actionErr(CodeChipOverbet, "已全下,无可投入")
 		}
 		target = s.bet + added
+		// 全下同样受「短全下不重开加注」约束：超过当前注即视为加注。
+		if target > g.currentBet && !s.canRaise {
+			return actionErr(CodeMinRaise, "短全下后本轮不可再加注,只能跟/弃")
+		}
 	default:
 		return actionErr(CodeBadAction, "未知动作类型")
 	}
@@ -294,6 +298,7 @@ func (g *Game) flipStreet(next string, withBetting bool) {
 // runout 全下扎堆:跳过剩余下注轮,直接发完剩余公共牌(无行动者)进摊牌。
 func (g *Game) runout() {
 	g.turn = -1
+	g.runoutFlag = true
 	g.stopTurnTimer()
 	for {
 		next, ok := streetAfter(g.street)

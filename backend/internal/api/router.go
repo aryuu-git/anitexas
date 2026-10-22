@@ -37,6 +37,7 @@ func NewRouter(d Deps) http.Handler {
 	r.Get("/api/health", d.handleHealth)
 	r.Post("/api/rooms", d.handleCreateRoom)
 	r.Get("/api/rooms", d.handleListRooms)
+	r.Get("/api/rooms/{code}", d.handlePreviewRoom)
 	r.Post("/api/rooms/{code}/join", d.handleJoinRoom)
 	r.Get("/api/cards/{id}", d.handleGetCard)
 
@@ -48,18 +49,20 @@ func NewRouter(d Deps) http.Handler {
 
 // createRoomReq 是建房参数（可选字段缺省回 ROOM_DEFAULT_*）。
 type createRoomReq struct {
-	Nick         string          `json:"nick"`
-	AutoReveal   *bool           `json:"autoReveal"` // D14：true = 开局全揭示
-	Seats        *int            `json:"seats"`
-	SmallBlind   *int            `json:"smallBlind"`
-	BigBlind     *int            `json:"bigBlind"`
-	Chips        *int            `json:"chips"`
-	RevealRate   *int            `json:"revealRate"`
-	DeckStrategy *string         `json:"deckStrategy"`
-	DeckSize     *int            `json:"deckSize"`
-	MinVotes     *int            `json:"minVotes"`     // 作品标注数下限（评分人数；0=不过滤）
-	ChatEnabled  *bool           `json:"chatEnabled"`  // 房主聊天开关（缺省 true）
-	ThemeFilter  *model.ThemeFilter `json:"themeFilter"` // deckStrategy=theme 时携带
+	Nick string `json:"nick"`
+	// CreateRequestID 是建房幂等键：同 id 重复提交返回同一房间（防双击建两桌）。
+	CreateRequestID string             `json:"createRequestId"`
+	AutoReveal      *bool              `json:"autoReveal"` // D14：true = 开局全揭示
+	Seats           *int               `json:"seats"`
+	SmallBlind      *int               `json:"smallBlind"`
+	BigBlind        *int               `json:"bigBlind"`
+	Chips           *int               `json:"chips"`
+	RevealRate      *int               `json:"revealRate"`
+	DeckStrategy    *string            `json:"deckStrategy"`
+	DeckSize        *int               `json:"deckSize"`
+	MinVotes        *int               `json:"minVotes"`    // 作品标注数下限（评分人数；0=不过滤）
+	ChatEnabled     *bool              `json:"chatEnabled"` // 房主聊天开关（缺省 true）
+	ThemeFilter     *model.ThemeFilter `json:"themeFilter"` // deckStrategy=theme 时携带
 }
 
 // roomDTO 是房间对外形态（建房响应与列表条目同形）。
@@ -73,18 +76,30 @@ type roomDTO struct {
 	RevealRate int    `json:"revealRate"`
 	Players    int    `json:"players"`
 	Status     string `json:"status"`
+	// ===== v2 预览扩展（加入确认页）=====
+	Phase      string `json:"phase"`
+	HandSeq    int    `json:"handSeq"`
+	HumanCount int    `json:"humanCount"`
+	BotCount   int    `json:"botCount"`
+	Joinable   bool   `json:"joinable"`
 }
 
-// joinRoomReq 是入座参数。
+// joinRoomReq 是入座参数（v2：凭 resumeToken 恢复身份、joinRequestId 幂等）。
 type joinRoomReq struct {
-	Nick string `json:"nick"`
+	Nick           string `json:"nick"`
+	ResumeToken    string `json:"resumeToken"`
+	JoinRequestID  string `json:"joinRequestId"`
+	RoomInstanceID string `json:"roomInstanceId"`
 }
 
 // joinRoomResp 是入座响应：ticket 供 WS join 握手（一次性，D9）。
 type joinRoomResp struct {
-	Ticket string  `json:"ticket"`
-	Seat   int     `json:"seat"`
-	Room   roomDTO `json:"room"`
+	Ticket         string  `json:"ticket"`
+	Seat           int     `json:"seat"`
+	Room           roomDTO `json:"room"`
+	ParticipantID  string  `json:"participantId"`
+	ResumeToken    string  `json:"resumeToken"`
+	RoomInstanceID string  `json:"roomInstanceId"`
 }
 
 // ===== REST handlers =====
@@ -143,13 +158,24 @@ func (d Deps) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		host = "牌手"
 	}
-	room, err := d.Rooms.CreateRoom(cfg, host)
+	room, err := d.Rooms.CreateRoomIdempotent(cfg, host, req.CreateRequestID)
 	if err != nil {
 		slog.Error("建房失败", "err", err)
 		writeErr(w, http.StatusInternalServerError, "create_failed", "建房失败")
 		return
 	}
 	writeJSON(w, http.StatusCreated, toRoomDTO(room))
+}
+
+// handlePreviewRoom 加入前预览（GET /api/rooms/{code}）：只读房间概要，不发 ticket。
+func (d Deps) handlePreviewRoom(w http.ResponseWriter, r *http.Request) {
+	code := strings.ToUpper(chi.URLParam(r, "code"))
+	rm, ok := d.Rooms.Get(code)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "room_not_found", "房间不存在或已解散")
+		return
+	}
+	writeJSON(w, http.StatusOK, toRoomDTO(rm))
 }
 
 // handleListRooms 房间列表（GET /api/rooms）。
@@ -185,20 +211,32 @@ func (d Deps) handleJoinRoom(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_nick", "昵称最长 12 字")
 		return
 	}
-	seat, err := rm.Join(nick)
+	seat, participantID, resumeToken, err := rm.JoinIdentity(nick, req.ResumeToken, req.JoinRequestID, req.RoomInstanceID)
 	if err != nil {
 		status := http.StatusConflict
-		if err == room.ErrRoomClosed {
+		codeName := "join_failed"
+		switch err {
+		case room.ErrRoomClosed:
 			status = http.StatusGone
+			codeName = "room_closed"
+		case room.ErrNickTaken:
+			status = http.StatusConflict
+			codeName = "nick_taken"
+		case room.ErrRoomFull:
+			status = http.StatusConflict
+			codeName = "room_full"
 		}
-		writeErr(w, status, "join_failed", err.Error())
+		writeErr(w, status, codeName, err.Error())
 		return
 	}
 	ticket := d.Tickets.Issue(code, seat, nick)
 	writeJSON(w, http.StatusOK, joinRoomResp{
-		Ticket: ticket,
-		Seat:   seat,
-		Room:   toRoomDTO(rm),
+		Ticket:         ticket,
+		Seat:           seat,
+		Room:           toRoomDTO(rm),
+		ParticipantID:  participantID,
+		ResumeToken:    resumeToken,
+		RoomInstanceID: rm.ID(),
 	})
 }
 
@@ -235,6 +273,8 @@ func summaryToDTO(s room.Summary, revealRate int) roomDTO {
 		Code: s.Code, Host: s.Host, AutoReveal: s.AutoReveal, Seats: s.Seats,
 		SmallBlind: s.SmallBlind, BigBlind: s.BigBlind,
 		RevealRate: revealRate, Players: s.Players, Status: s.Status,
+		Phase: s.Phase, HandSeq: s.HandSeq, HumanCount: s.HumanCount,
+		BotCount: s.BotCount, Joinable: s.Joinable,
 	}
 }
 

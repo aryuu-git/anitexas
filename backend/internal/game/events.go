@@ -13,7 +13,15 @@ const (
 	EventShowdown = "showdown"
 	EventSettled  = "settled"
 	EventError    = "error"
+	// EventCommit 是 v2 事务提交：与同批过程事件保序，载荷为锁内捕获的不可变全视角快照。
+	EventCommit = "commit"
 )
+
+// CommitPayload 是一次 game 事务的不可变状态投影（Snapshots 下标即座位号）。
+// room 顺序消费本事件，叠加房间状态后生成按接收者裁剪的 StateFrame。
+type CommitPayload struct {
+	Snapshots []Snapshot `json:"snapshots"`
+}
 
 // Event 是事件流的统一信封;Payload 为对应 *Payload 结构(直发 WS 用)。
 type Event struct {
@@ -79,21 +87,21 @@ type RevealRecord struct {
 
 // RevealedPayload 是揭示广播:elements 此时才下发(未揭示不进任何下行消息,D7)。
 type RevealedPayload struct {
-	Seat     int          `json:"seat"`
-	CardID   int64        `json:"cardId"`
-	Scope    string       `json:"scope"`
-	Cost     int          `json:"cost"`
+	Seat     int           `json:"seat"`
+	CardID   int64         `json:"cardId"`
+	Scope    string        `json:"scope"`
+	Cost     int           `json:"cost"`
 	Elements []WireElement `json:"elements"`
 }
 
 // ShowdownHand 是一家的摊牌:cards 为该玩家全部 7 张(2 底牌 + 5 公共,此时一切解密);
 // groups 为成组划分(坐标系 = cards 下标,散牌不在任何组)。
 type ShowdownHand struct {
-	Seat     int         `json:"seat"`
-	Cards    []CardView  `json:"cards"`
-	Groups   [][]int     `json:"groups"`
-	Tier     int         `json:"tier"`
-	Tiebreak []float64   `json:"tiebreak"`
+	Seat     int        `json:"seat"`
+	Cards    []CardView `json:"cards"`
+	Groups   [][]int    `json:"groups"`
+	Tier     int        `json:"tier"`
+	Tiebreak []float64  `json:"tiebreak"`
 }
 
 // ShowdownPayload 是摊牌事件(弃牌家的底牌永不出局)。

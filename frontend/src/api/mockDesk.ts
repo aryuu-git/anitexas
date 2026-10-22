@@ -14,12 +14,18 @@ import type {
   BoxCard,
   CardData,
   ClientMessage,
+  CommandReceipt,
   DeckStrategy,
   EmoteKey,
   Envelope,
+  ExperienceEvent,
+  HandResult,
   PoolInfo,
   RevealScope,
   SeatState,
+  SettleRow,
+  SnapshotPayload,
+  StateFrame,
   ThemeFilter,
 } from './types'
 import {
@@ -97,6 +103,12 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
   /** 最小加注增量：raise 的 target 须 ≥ currentBet + minRaise（全下豁免） */
   let minRaise = opts.bigBlind
   let seedShown = false
+  /** v2：房间实例与可见状态版本（每次可见事务 +1） */
+  const instanceId = `mock-${opts.roomCode}-1`
+  let revision = 0
+  let nextHandAt: number | null = null
+  let lastResult: HandResult | null = null
+  let eventSeq = 0
   const chips = new Array<number>(SEAT_IDS.length).fill(START_CHIPS)
   /** 本轮已下注（换街清零） */
   const bets = new Array<number>(SEAT_IDS.length).fill(0)
@@ -137,8 +149,28 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
 
   // ===== 快照构造 =====
 
-  /** 全量快照（加入、重连、修复、街首同步都用它；底牌由 dealt 单一下发） */
-  const snapshot = (withHoleCards = true) => {
+  /** 服务端规则给出的本人合法动作（UI 唯一依据） */
+  const myLegalActions = (): ActionType[] => {
+    if (phase !== 'playing' || turnSeat !== 0 || folded[0]) return []
+    const toCall = Math.max(0, currentBet - bets[0])
+    const out: ActionType[] = ['fold']
+    // 与服务端 legalActionsLocked 对齐：跟齐额超过剩余筹码时只列 allin，不列 call
+    if (toCall === 0) out.push('check')
+    else if (toCall <= chips[0]) out.push('call')
+    if (chips[0] > toCall) out.push(currentBet > 0 ? 'raise' : 'bet')
+    if (chips[0] > 0) out.push('allin')
+    return out
+  }
+
+  const phaseValue = (): SnapshotPayload['phase'] =>
+    phase === 'waiting'
+      ? 'waiting'
+      : phase === 'settled'
+        ? 'settled'
+        : (['preflop', 'flop', 'turn', 'river'] as const)[Math.max(0, street - 1)]
+
+  /** 全量快照（v2 权威状态帧的 state 区；加入、重连、每次可见事务都用它） */
+  const buildSnapshot = (withHoleCards = true): SnapshotPayload => {
     const seats: SeatState[] = SEAT_IDS.map((seat) => ({
       seat,
       nick: nicks[seat],
@@ -151,17 +183,21 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
       holeCount: street === 0 ? 0 : 2,
       ready: ready[seat],
       rebuys: rebuys[seat],
+      occupantKind: seat === 0 ? 'human' : 'bot',
+      connection: seat === 0 ? 'online' : 'not_applicable',
+      inHand: street > 0 && !folded[seat],
+      allIn: street > 0 && chips[seat] === 0 && !folded[seat],
+      pendingLeave: false,
     }))
     const dealtCommunity = [FLOP, TURN, RIVER].slice(0, Math.max(0, street - 1)).flat()
-    emit('snapshot', {
+    const toCall = Math.max(0, currentBet - bets[0])
+    const minTarget = currentBet + (minRaise > 0 ? minRaise : opts.bigBlind)
+    const canRaise = phase === 'playing' && bets[0] + chips[0] >= minTarget
+    const legal = myLegalActions()
+    return {
       roomCode: opts.roomCode,
       autoReveal: opts.autoReveal,
-      phase:
-        phase === 'waiting'
-          ? 'waiting'
-          : phase === 'settled'
-            ? 'settled'
-            : (['preflop', 'flop', 'turn', 'river'] as const)[Math.max(0, street - 1)],
+      phase: phaseValue(),
       handSeq,
       seats,
       mySeat: 0,
@@ -177,16 +213,108 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
       reveals: [],
       chatEnabled: opts.chatEnabled !== false,
       seedCommit: handSeq > 0 ? MOCK_SEED_COMMIT : null,
-      // 契约增量：基线序号（= 本条快照的信封序号，emit 每次 +1）/ 最小加注 / 行动时限 /
-      // 当前手 seed / 盒名单 / 牌池
       seq: seq + 1,
       minRaise,
       turnMs: TURN_MS,
       seed: seedShown ? MOCK_SEED : null,
       box,
       pool,
-    })
+      // ===== v2 =====
+      roomInstanceId: instanceId,
+      revision,
+      roomStatus: phase === 'playing' ? 'playing' : 'waiting',
+      nextHandAt,
+      nextHandPolicy: 'automatic',
+      readiness: {
+        eligibleSeats: [0],
+        readySeats: ready[0] ? [0] : [],
+        blockers: ready[0] ? [] : [{ seat: 0, reason: 'unready' }],
+      },
+      viewerStatus: 'seated',
+      removalReason: null,
+      // 与服务端 participationLocked 对齐：waiting 未开局；playing 弃牌者等下一手
+      participation:
+        phase === 'waiting' ? 'not_started' : folded[0] ? 'waiting_next_hand' : 'in_hand',
+      legalActions: legal,
+      callAmount: toCall,
+      minRaiseTo: legal.includes('raise') || legal.includes('bet') ? (canRaise ? minTarget : null) : null,
+      maxRaiseTo: bets[0] + chips[0],
+      timeoutAction: turnSeat >= 0 ? (toCall > 0 ? 'fold' : 'check') : null,
+      runout: false,
+      lastResult,
+      recentEvents: [],
+    }
   }
+
+  /** 旧版增量快照（兼容既有事件消费方；v2 客户端以 state 帧为准） */
+  const snapshot = (withHoleCards = true) => emit('snapshot', buildSnapshot(withHoleCards))
+
+  /** v2 权威状态帧：每次可见事务结束发一帧完整、按视角裁剪的状态 */
+  const emitState = (reason: StateFrame['reason'], events: ExperienceEvent[] = []) => {
+    revision++
+    const evs = events.map((ev, i) => ({ ...ev, eventId: ev.eventId || `mock-${revision}-${i}-${++eventSeq}` }))
+    // 命令回执随本次提交帧返回（只给命令所属玩家；mock 只有座位 0 是人类）
+    const receipts = pendingReceipt ? [pendingReceipt] : []
+    pendingReceipt = null
+    const frame: StateFrame = {
+      protocolVersion: 2,
+      roomCode: opts.roomCode,
+      roomInstanceId: instanceId,
+      revision,
+      serverNow: Date.now(),
+      reason,
+      state: buildSnapshot(true),
+      events: evs,
+      receipts,
+    }
+    emit('state', frame)
+  }
+
+  /** 待回执命令（applied 随下一次提交帧；rejected 用同 revision 帧回执） */
+  let pendingReceipt: CommandReceipt | null = null
+
+  /** 同一 revision 的状态帧只带回执（不改变权威数据，客户端只合并回执） */
+  const emitReceiptFrame = (receipt: CommandReceipt) => {
+    emit('state', {
+      protocolVersion: 2,
+      roomCode: opts.roomCode,
+      roomInstanceId: instanceId,
+      revision,
+      serverNow: Date.now(),
+      reason: 'mutation',
+      state: buildSnapshot(true),
+      events: [],
+      receipts: [receipt],
+    } satisfies StateFrame)
+  }
+
+  /** 命令被拒：回 rejected 回执（不产生版本变更） */
+  const rejectPending = (code: string) => {
+    if (!pendingReceipt) return
+    const receipt: CommandReceipt = {
+      ...pendingReceipt,
+      status: 'rejected',
+      appliedRevision: null,
+      code,
+    }
+    pendingReceipt = null
+    emitReceiptFrame(receipt)
+  }
+
+  /** 构造一条过程事件（只用于历史/音效，不参与权威归约） */
+  const ev = (
+    kind: ExperienceEvent['kind'],
+    seat: number | null,
+    payload?: Record<string, unknown>,
+  ): ExperienceEvent => ({
+    eventId: '',
+    handSeq,
+    phase: phaseValue(),
+    kind,
+    seat,
+    occurredAt: Date.now(),
+    payload,
+  })
 
   // ===== 流程推进 =====
 
@@ -208,6 +336,8 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
     pot = 0
     currentBet = opts.bigBlind
     minRaise = opts.bigBlind
+    nextHandAt = null
+    // lastResult 保留到下一手结算（与后端同口径）：桌面「上手结果」回顾的依据
     dealer = (handSeq - 1) % SEAT_IDS.length // 轮庄：每手换庄
     for (const s of SEAT_IDS) {
       bets[s] = 0
@@ -234,6 +364,8 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
     deadline = turnSeat < 0 ? null : Date.now() + TURN_MS
     // 底牌由随后的 dealt 事件单一下发（快照先留空，防重复）
     snapshot(false)
+    // v2：开局即发完整权威帧（底牌、盲注、行动权、截止时间同一逻辑提交）
+    emitState('mutation', [ev('blind_posted', bb, { amount: opts.bigBlind })])
     // 开局固证（commit-reveal）：先承诺种子哈希，摊牌才揭种子
     emit('seedCommit', { sha256: MOCK_SEED_COMMIT })
     // 发牌：自己拿到牌对象，他人只到「已发 2 张」占位（D7）；
@@ -303,6 +435,7 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
       turnSeat = -1
       deadline = null
       emit('acted', { seat, type, amount: paid, minRaise, turnSeat: -1, deadline: null })
+      emitState('mutation', [ev('acted', seat, { type, amount: paid, target: bets[seat] })])
       // 本轮无后续行动者：只剩一人直接收池，否则进下一街
       later(alive.length <= 1 ? runShowdown : nextStreet, BOT_STEP_MS)
       return
@@ -310,6 +443,7 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
     turnSeat = actor
     deadline = Date.now() + TURN_MS
     emit('acted', { seat, type, amount: paid, minRaise, turnSeat: actor, deadline })
+    emitState('mutation', [ev('acted', seat, { type, amount: paid, target: bets[seat] })])
     if (actor !== 0) later(() => botAct(actor), BOT_STEP_MS)
   }
 
@@ -332,6 +466,8 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
     turnSeat = nextActor(dealer)
     deadline = turnSeat < 0 ? null : Date.now() + TURN_MS
     emit(name, { cards: shown(cards), turnSeat, deadline, minRaise })
+    // 与后端事件名一致：换街事件本身就是 flop / turn / river
+    emitState('mutation', [ev(name, null)])
     const firstActor = turnSeat
     if (firstActor > 0) later(() => botAct(firstActor), BOT_STEP_MS)
     else if (firstActor < 0) later(nextStreet, BOT_STEP_MS) // 全下桌：无行动者，直接发下一街
@@ -369,20 +505,36 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
       later(() => {
         const winner = hands.length > 1 ? hands[0].seat : alive[0]
         chips[winner] += pot
-        emit('settled', {
-          potWins: { [winner]: pot },
-          rows: SEAT_IDS.map((seat) => ({
+        const rows: SettleRow[] = SEAT_IDS.map((seat) => ({
+          seat,
+          chipsDelta: (seat === winner ? pot : 0) - staked[seat],
+          points:
+            seat === winner
+              ? { handScore: 42, bondBonus: 12, revealCost: 0 }
+              : { handScore: 12, bondBonus: 4, revealCost: 0 },
+        }))
+        emit('settled', { potWins: { [winner]: pot }, rows })
+        // v2：冻结结算摘要（昵称/座位在结算时定格，下一手换人不影响上手获奖名单）
+        lastResult = {
+          handSeq,
+          endedAt: Date.now(),
+          endReason: hands.length > 1 ? 'showdown' : 'fold_win',
+          seats: SEAT_IDS.map((seat) => ({
             seat,
-            chipsDelta: (seat === winner ? pot : 0) - staked[seat],
-            points:
-              seat === winner
-                ? { handScore: 42, bondBonus: 12, revealCost: 0 }
-                : { handScore: 12, bondBonus: 4, revealCost: 0 },
+            nick: nicks[seat],
+            occupantKind: seat === 0 ? 'human' : 'bot',
           })),
-        })
+          rows,
+          potWins: { [winner]: pot },
+          showdown: hands.length > 1 ? hands : [],
+        }
         // 对账：筹码结构变化（破产重买）后广播全量快照
         rebuyBusted()
         snapshot(true)
+        emitState('mutation', [
+          ev('showdown', null),
+          ev('settled', winner, { pot: pot, endReason: lastResult.endReason }),
+        ])
         scheduleNextHand()
       }, 1200)
     }, 800)
@@ -405,7 +557,9 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
 
   /** 下一手排程：nextHand 广播 + 到点自动开局（active ≥ 2）；全员 ready 可提前 */
   const scheduleNextHand = () => {
-    emit('nextHand', { startAt: Date.now() + NEXT_HAND_DELAY_MS })
+    nextHandAt = Date.now() + NEXT_HAND_DELAY_MS
+    emit('nextHand', { startAt: nextHandAt })
+    emitState('mutation', [ev('next_hand_scheduled', null, { startAt: nextHandAt })])
     later(() => {
       if (phase === 'settled') startHand()
     }, NEXT_HAND_DELAY_MS)
@@ -415,9 +569,13 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
 
   /** ready：waiting/settled 收下并广播 readied；全员 ready 提前开局（局中忽略） */
   const onReady = () => {
-    if (phase === 'playing') return
+    if (phase === 'playing') {
+      rejectPending('not_waiting')
+      return
+    }
     ready[0] = true
     emit('readied', { seat: 0 })
+    emitState('mutation', [ev('readied', 0)])
     if (phase === 'waiting' && ready.every(Boolean)) {
       startHand()
       return
@@ -429,6 +587,7 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
         if (phase !== 'settled') return
         ready[seat] = true
         emit('readied', { seat })
+        emitState('mutation', [ev('readied', seat)])
       }, 200 * seat)
     }
     later(() => {
@@ -437,13 +596,18 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
   }
 
   const onAction = (type: ActionType, amount: number) => {
-    if (phase !== 'playing') return
+    if (phase !== 'playing') {
+      rejectPending('not_playing')
+      return
+    }
     if (turnSeat !== 0) {
+      rejectPending('not_your_turn')
       emit('error', { code: 'not_your_turn', msg: '还没轮到你' })
       return
     }
     const toCall = Math.max(0, currentBet - bets[0])
     if (type === 'check' && toCall > 0) {
+      rejectPending('illegal_check')
       emit('error', { code: 'illegal_check', msg: `需跟注 ${toCall} 才能过牌` })
       return
     }
@@ -451,6 +615,7 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
       // amount = 「加到」的目标：≥ currentBet + minRaise（全下豁免）
       const minTarget = currentBet + minRaise
       if (amount < minTarget && amount < chips[0]) {
+        rejectPending('illegal_raise')
         emit('error', { code: 'illegal_raise', msg: `目标需至少加到 ${minTarget}（全下豁免）` })
         return
       }
@@ -520,13 +685,24 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
     later(() => emit('said', { seat: 1, text: '收到，这手我跟。' }), 1200)
   }
 
+  /** 带 requestId 的命令：先登记 applied 回执，由本次提交帧带回；未产生变更则回 rejected */
+  const withReceipt = (requestId: string | undefined, fn: () => void) => {
+    if (!requestId) {
+      fn()
+      return
+    }
+    pendingReceipt = { requestId, status: 'applied', appliedRevision: revision + 1, code: null }
+    fn()
+    rejectPending('not_applicable')
+  }
+
   const handle = (msg: ClientMessage) => {
     switch (msg.t) {
       case 'ready':
-        onReady()
+        withReceipt(msg.p.requestId, onReady)
         return
       case 'action':
-        onAction(msg.p.type, msg.p.amount ?? 0)
+        withReceipt(msg.p.requestId, () => onAction(msg.p.type, msg.p.amount ?? 0))
         return
       case 'reveal':
         onReveal(msg.p.cardId, msg.p.scope)
@@ -539,6 +715,7 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
         return
       case 'resync':
         snapshot(true)
+        emitState('resync')
         return
       case 'leave':
         close()
@@ -560,6 +737,8 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
       ready[seat] = true
       emit('readied', { seat })
     }
+    // v2：进桌后的首个权威帧（含 bot 已准备状态），客户端据此离开「同步中」
+    emitState('join')
   }, 250)
 
   return { send: handle, close }

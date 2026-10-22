@@ -7,11 +7,13 @@
  *   GET  /api/health             健康检查 → {status:"ok"}
  * 全部 JSON；错误统一回 {code,msg}。
  */
-import type { ThemeFilter } from './types'
+import type { Phase, ThemeFilter } from './types'
 
 /** 建房配置（可选项与后端 room.config JSON 对齐） */
 export interface CreateRoomRequest {
   nick?: string
+  /** 建房幂等键：响应丢失重试不会重复建房 */
+  createRequestId?: string
   /** 开局自动展开要素（D14） */
   autoReveal?: boolean
   seats?: number
@@ -29,7 +31,7 @@ export interface CreateRoomRequest {
   chatEnabled?: boolean
 }
 
-/** 房间概要（列表/建房回执同构） */
+/** 房间概要（列表/建房/预览回执同构） */
 export interface RoomSummary {
   code: string
   host: string
@@ -40,14 +42,33 @@ export interface RoomSummary {
   bigBlind: number
   revealRate: number
   players: number
+  /** ===== v2 预览扩展 ===== */
+  /** 房间生命周期状态（waiting | playing | closed） */
+  status?: 'waiting' | 'playing' | 'closed'
+  phase?: Phase
+  handSeq?: number
+  humanCount?: number
+  botCount?: number
+  joinable?: boolean
 }
 
-/** 入座回执：ticket 一次性，同昵称重复 join = 重连复用原座位、换新 ticket */
+/** 入座回执：ticket 一次性；resumeToken 用于刷新/重连恢复身份 */
 export interface JoinResponse {
   ticket: string
   seat: number
   /** 房间概要（同建房回执） */
   room: RoomSummary
+  participantId?: string
+  resumeToken?: string
+  roomInstanceId?: string
+}
+
+/** 入座请求（v2：凭据恢复 + 幂等 + 原子复核） */
+export interface JoinRoomRequest {
+  nick: string
+  resumeToken?: string
+  joinRequestId?: string
+  roomInstanceId?: string
 }
 
 /** 牌面 L1（GET /api/cards/{id}；永不含 elements） */
@@ -108,11 +129,17 @@ export async function listRooms(): Promise<RoomSummary[]> {
   return body.rooms
 }
 
-/** 入座：拿一次性 ticket（WS join 握手用） */
-export function joinRoom(code: string, nick: string): Promise<JoinResponse> {
+/** 房间预览（GET /api/rooms/{code}）：无副作用，不占座、不发凭据 */
+export function previewRoom(code: string): Promise<RoomSummary> {
+  return request<RoomSummary>(`/api/rooms/${encodeURIComponent(code)}`)
+}
+
+/** 入座：拿一次性 ticket（WS join 握手用）；resumeToken 可恢复原身份 */
+export function joinRoom(code: string, req: string | JoinRoomRequest): Promise<JoinResponse> {
+  const body = typeof req === 'string' ? { nick: req } : req
   return request<JoinResponse>(`/api/rooms/${encodeURIComponent(code)}/join`, {
     method: 'POST',
-    body: JSON.stringify({ nick }),
+    body: JSON.stringify(body),
   })
 }
 

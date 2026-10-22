@@ -117,6 +117,11 @@ export const THEME_KIND_OPTIONS: { kind: ThemeKind; label: string }[] = [
 
 // ===== 下行载荷（§5 server → client）=====
 
+/** 座位占用类型（v2：不由昵称前缀猜机器人） */
+export type OccupantKind = 'empty' | 'human' | 'bot'
+/** 连接状态（v2：bot/空座为 not_applicable） */
+export type Connection = 'online' | 'offline' | 'not_applicable'
+
 /** 座位公开状态 */
 export interface SeatState {
   seat: number
@@ -135,6 +140,15 @@ export interface SeatState {
   ready: boolean
   /** 重买次数（破产就地重买累计，达 MAX_REBUYS 自动离席） */
   rebuys: number
+  /** ===== v2 扩展 ===== */
+  occupantKind?: OccupantKind
+  connection?: Connection
+  /** 本手是否已发到底牌（参与本手） */
+  inHand?: boolean
+  /** 本手已全下（不由 chips=0 推算） */
+  allIn?: boolean
+  /** 局内已请求离座、本手结束后生效 */
+  pendingLeave?: boolean
 }
 
 /** 盒名单条目（D17：本手发牌盒公开名单；仅 L1 字段，不带 elements） */
@@ -198,6 +212,126 @@ export interface SnapshotPayload {
   box: BoxCard[]
   /** 本桌牌池摘要 */
   pool: PoolInfo
+  /** ===== v2 权威状态扩展（protocolVersion=2）===== */
+  /** 房间实例标识：重建同码房间也不同 */
+  roomInstanceId?: string
+  /** 房间可见状态版本（同一提交的多个接收者共享） */
+  revision?: number
+  /** 房间生命周期状态 */
+  roomStatus?: RoomStatus
+  /** 下一手自动开局时刻（epoch ms；null = 未排程） */
+  nextHandAt?: number | null
+  /** 服务端实际生效策略 */
+  nextHandPolicy?: 'manual' | 'automatic'
+  /** 阻塞本次开局的真人准备情况（服务端计算） */
+  readiness?: Readiness
+  /** 接收者状态：seated | removed */
+  viewerStatus?: ViewerStatus
+  /** 离席原因（未离席为 null） */
+  removalReason?: RemovalReason | null
+  /** 接收者参局状态 */
+  participation?: Participation
+  /** 服务端按规则给出的合法动作（非本人行动时为空） */
+  legalActions?: ActionType[]
+  /** 跟齐所需增量（可大于剩余筹码） */
+  callAmount?: number
+  /** 合法最小加注目标（不可加注为 null） */
+  minRaiseTo?: number | null
+  /** 本轮已下注 + 剩余筹码 */
+  maxRaiseTo?: number
+  /** 倒计时归零后的自动动作 */
+  timeoutAction?: 'check' | 'fold' | null
+  /** 本手已进入全下直发 */
+  runout?: boolean
+  /** 最近一手服务端结算摘要 */
+  lastResult?: HandResult | null
+  /** 按视角过滤的有限过程历史 */
+  recentEvents?: ExperienceEvent[]
+}
+
+/** ===== v2 状态帧与命令确认 ===== */
+
+export type RoomStatus = 'waiting' | 'playing' | 'closed'
+export type ViewerStatus = 'seated' | 'removed'
+export type RemovalReason = 'left' | 'rebuy_limit' | 'expired'
+export type Participation = 'in_hand' | 'waiting_next_hand' | 'not_started'
+export type StateReason = 'join' | 'resync' | 'mutation'
+export type NextHandPolicy = 'manual' | 'automatic'
+
+/** 开局准备度（排除 bot/空座/明确离席者） */
+export interface Readiness {
+  eligibleSeats: number[]
+  readySeats: number[]
+  blockers: { seat: number; reason: 'unready' | 'offline' }[]
+}
+
+/** v2 过程事件：只用于文字历史、音效与动画，不参与权威归约 */
+export interface ExperienceEvent {
+  eventId: string
+  handSeq: number
+  phase: Phase
+  kind: ExperienceEventKind
+  seat: number | null
+  occurredAt: number
+  payload?: Record<string, unknown>
+}
+
+export type ExperienceEventKind =
+  | 'blind_posted'
+  | 'acted'
+  | 'flop'
+  | 'turn'
+  | 'river'
+  | 'showdown'
+  | 'settled'
+  | 'readied'
+  | 'seat_changed'
+  | 'rebuy'
+  | 'next_hand_scheduled'
+  | 'next_hand_cancelled'
+  | 'revealed'
+  | 'dealt'
+  | 'seed_commit'
+  | 'seed_reveal'
+  | 'error'
+
+/** 命令回执（只发给命令所属玩家） */
+export interface CommandReceipt {
+  requestId: string
+  status: 'applied' | 'rejected' | 'unknown'
+  appliedRevision?: number | null
+  code?: string | null
+}
+
+/** 结算时冻结的参与者身份 */
+export interface ResultSeat {
+  seat: number
+  nick: string
+  occupantKind: OccupantKind
+}
+
+/** 最近一手的冻结结算摘要 */
+export interface HandResult {
+  handSeq: number
+  endedAt: number
+  endReason: 'showdown' | 'fold_win'
+  seats: ResultSeat[]
+  rows: SettleRow[]
+  potWins: Record<number, number>
+  showdown: ShowdownHand[]
+}
+
+/** v2 权威状态帧（WS 下行 t='state' 的载荷） */
+export interface StateFrame {
+  protocolVersion: number
+  roomCode: string
+  roomInstanceId: string
+  revision: number
+  serverNow: number
+  reason: StateReason
+  state: SnapshotPayload
+  events: ExperienceEvent[]
+  receipts: CommandReceipt[]
 }
 
 /** dealt：发牌（底牌只发给本人，他人只收到占位） */
@@ -324,19 +458,37 @@ export interface ErrorPayload {
 
 // ===== 上行载荷（§5 client → server）=====
 
+/** v2 命令公共元数据：确认、去重与版本核对（全部可选，缺省走 v1 宽松语义） */
+export interface CommandMeta {
+  protocolVersion?: number
+  roomInstanceId?: string
+  requestId?: string
+  expectedHandSeq?: number
+  expectedRevision?: number
+}
+
 export type ClientMessage =
-  | { t: 'join'; p: { roomCode: string; nick: string; ticket: string } }
-  | { t: 'ready'; p: Record<string, never> }
-  | { t: 'action'; p: { type: ActionType; amount?: number } }
-  | { t: 'reveal'; p: { cardId: number; scope: RevealScope } }
+  | {
+      t: 'join'
+      p: {
+        roomCode: string
+        nick: string
+        ticket: string
+        protocolVersion?: number
+        roomInstanceId?: string
+      }
+    }
+  | { t: 'ready'; p: CommandMeta }
+  | { t: 'action'; p: { type: ActionType; amount?: number } & CommandMeta }
+  | { t: 'reveal'; p: { cardId: number; scope: RevealScope } & CommandMeta }
   /** 快捷表情（服务端 10 秒/座位冷却，超限回 error{code:"emote_failed"}） */
   | { t: 'emote'; p: { key: EmoteKey } }
   /** 聊天上行（text ≤ CHAT_MAX_LEN；客户端节流 CHAT_THROTTLE_MS，服务端同限校验） */
   | { t: 'say'; p: { text: string } }
-  | { t: 'leave'; p: Record<string, never> }
+  | { t: 'leave'; p: CommandMeta }
   | { t: 'ping'; p: Record<string, never> }
-  /** 断线重连后请求快照修复 */
-  | { t: 'resync'; p: Record<string, never> }
+  /** 断线重连后请求快照修复（可携带待核对 requestId） */
+  | { t: 'resync'; p: { requestId?: string } }
 
 // ===== 信封 =====
 
@@ -348,6 +500,7 @@ export interface Envelope<T = unknown> {
 
 /** 下行消息类型联合（便于 useRoomSocket 分发） */
 export type ServerEvent =
+  | Envelope<StateFrame>
   | Envelope<SnapshotPayload>
   | Envelope<DealtPayload>
   | Envelope<CommunityPayload>

@@ -91,7 +91,7 @@ func (d Deps) handleWS(w http.ResponseWriter, r *http.Request) {
 	go c.writePump()
 	defer func() {
 		if c.room != nil {
-			c.room.Detach(c.seat)
+			c.room.DetachLink(c.seat, c) // 连接代际保护：旧连接关闭不踢掉新连接
 		}
 		if c.ticket != "" {
 			d.Tickets.Release(c.ticket) // 断开释放券占用：TTL 内可重连核销（防顶号兼顾重连）
@@ -159,8 +159,18 @@ func (d Deps) handleJoin(c *wsClient, env model.Envelope) error {
 func (d Deps) dispatch(c *wsClient, env model.Envelope) {
 	switch env.T {
 	case model.TypeReady:
-		if err := c.room.Ready(c.seat); err != nil {
-			c.room.SendError(c.seat, "ready_failed", err.Error())
+		var p model.ReadyPayload
+		if err := env.Decode(&p); err != nil {
+			c.room.SendError(c.seat, "bad_ready", "ready 载荷不合法")
+			return
+		}
+		if err := c.room.ReadyWithMeta(c.seat, p.CommandMeta); err != nil {
+			// 拒绝回执由 room 内部发（带 requestId 时附 rejected receipt）；
+			// 座位已释放等无回执路径必须兜底回错，否则客户端 pending 永久挂起。
+			if errors.Is(err, room.ErrBadSeat) {
+				c.room.SendError(c.seat, "bad_seat", err.Error())
+			}
+			return
 		}
 
 	case model.TypeAction:
@@ -181,16 +191,31 @@ func (d Deps) dispatch(c *wsClient, env model.Envelope) {
 		_, _ = c.room.Reveal(c.seat, p)
 
 	case model.TypeLeave:
-		if err := c.room.Leave(c.seat); err != nil {
-			c.room.SendError(c.seat, "leave_failed", err.Error())
+		var p model.LeavePayload
+		if err := env.Decode(&p); err != nil {
+			c.room.SendError(c.seat, "bad_leave", "leave 载荷不合法")
+			return
 		}
+		if err := c.room.LeaveWithMeta(c.seat, p.CommandMeta); err != nil {
+			// 拒绝回执由 room 内部发；ErrBadSeat 无回执路径需兜底。
+			if errors.Is(err, room.ErrBadSeat) {
+				c.room.SendError(c.seat, "bad_seat", err.Error())
+			}
+			return
+		}
+		// 离座后本连接不再持有座位：否则座位被他人接替时，旧连接仍能以该 seat
+		// 弃牌/全下/揭示（room 只校验座位非空，不校验连接归属）。后续消息按未握手处理。
+		c.seat = -1
+		c.room = nil
 
 	case model.TypePing:
 		// 心跳保活：WS 层 ping/pong 由协议栈处理，应用层 ping 不需回执（§5 下行无 pong）。
 
 	case model.TypeResync:
-		// 快照修复（A4.3）：断线重连或客户端状态漂移时补全量。
-		c.room.Resync(c.seat)
+		// 快照修复（A4.3）：断线重连或客户端状态漂移时补全量；v2 可带待核对 requestId。
+		var p model.ResyncPayload
+		_ = env.Decode(&p)
+		c.room.ResyncWithMeta(c.seat, p.RequestID)
 
 	case model.TypeEmote:
 		// 表情（D15）：key 白名单 + 10 秒/座位冷却由 room 校验，成功即全桌广播 emoted。

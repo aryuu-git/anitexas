@@ -344,7 +344,7 @@ func SampleDeckBox(library []engine.Card, n int, seed int64, maxElemFreq int) []
 			q := seats * len(byKey[k]) / total
 			sel[k] = q
 			used += q
-			fracs = append(fracs, frac{k: k, rest: seats*len(byKey[k]) % total})
+			fracs = append(fracs, frac{k: k, rest: seats * len(byKey[k]) % total})
 		}
 		sort.SliceStable(fracs, func(i, j int) bool {
 			if fracs[i].rest != fracs[j].rest {
@@ -430,7 +430,7 @@ func SampleDeckBox(library []engine.Card, n int, seed int64, maxElemFreq int) []
 			if !donorOK || !targetOK {
 				break
 			}
-			sel[donor]-- // 回退洗牌序列末位
+			sel[donor]--  // 回退洗牌序列末位
 			sel[target]++ // 补入洗牌序列首位(剩余位)
 		}
 	}

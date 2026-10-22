@@ -48,7 +48,8 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   },
   ref,
 ) {
-  const isDisabled = disabled ?? loading
+  // loading 必须锁住点击（不能因为显式传了 disabled={false} 而失效）
+  const isDisabled = !!disabled || loading
   // data-state 暴露五状态（loading > disabled > ready；hover/active/focus 为 CSS 交互态）
   const state = loading ? 'loading' : isDisabled ? 'disabled' : 'ready'
   return (

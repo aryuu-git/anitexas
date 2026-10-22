@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -29,11 +30,22 @@ type ManagerOptions struct {
 // Manager 是大厅（§4.3 lobby）：创建 / 列表 / 加入。v1 不做匹配，靠房间码（D9）。
 type Manager struct {
 	mu    sync.Mutex
-	rooms map[string]*Room
+	// createMu 串行化带幂等键的建房：查 memo → 建房 → 写 memo 必须是一个原子段，
+	// 否则并发同 requestId 会各建一桌（后写覆盖 memo，前者成无主房）。
+	createMu sync.Mutex
+	rooms    map[string]*Room
+	// creates 是建房幂等缓存：createRequestId → 房间码（防双击建两桌）。
+	creates map[string]createMemo
 
 	st      *store.Store
 	opts    ManagerOptions
 	library []engine.Card
+}
+
+// createMemo 是一条建房幂等记录（10 分钟后失效）。
+type createMemo struct {
+	code    string
+	expires time.Time
 }
 
 // NewManager 建大厅：从 cards 表载入卡池 library（启动时已由 store.LoadCardsFromJSON 灌入）。
@@ -51,10 +63,43 @@ func NewManager(st *store.Store, opts ManagerOptions) (*Manager, error) {
 	}
 	return &Manager{
 		rooms:   make(map[string]*Room),
+		creates: make(map[string]createMemo),
 		st:      st,
 		opts:    opts,
 		library: library,
 	}, nil
+}
+
+// CreateRoomIdempotent 建房（带幂等键）：同 createRequestId 重复提交返回同一房间。
+func (m *Manager) CreateRoomIdempotent(cfg model.RoomConfig, host, requestID string) (*Room, error) {
+	if requestID != "" {
+		m.createMu.Lock()
+		defer m.createMu.Unlock()
+		m.mu.Lock()
+		if memo, ok := m.creates[requestID]; ok && time.Now().Before(memo.expires) {
+			if r, ok := m.rooms[memo.code]; ok {
+				m.mu.Unlock()
+				return r, nil
+			}
+		}
+		m.mu.Unlock()
+	}
+	r, err := m.CreateRoom(cfg, host)
+	if err != nil {
+		return nil, err
+	}
+	if requestID != "" {
+		m.mu.Lock()
+		now := time.Now()
+		for k, memo := range m.creates {
+			if now.After(memo.expires) {
+				delete(m.creates, k)
+			}
+		}
+		m.creates[requestID] = createMemo{code: r.Code(), expires: now.Add(10 * time.Minute)}
+		m.mu.Unlock()
+	}
+	return r, nil
 }
 
 // CreateRoom 建房：生成 6 位房间码（避开易混字符，撞库重试）并落 rooms 行。

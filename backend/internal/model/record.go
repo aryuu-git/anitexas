@@ -10,13 +10,13 @@ import "time"
 // （字段与管线产物逐字一致：id/title/score/bucket/year/type/monogram/elements）。
 // UpdatedAt 为落库时间，不来自产物。
 type CardRecord struct {
-	ID       int64     `json:"id"`
-	Title    string    `json:"title"`
-	Score    float64   `json:"score"`
-	Bucket   float64   `json:"bucket"`
-	Year     int       `json:"year"`
-	Type     string    `json:"type"`
-	Monogram string    `json:"monogram"`
+	ID       int64   `json:"id"`
+	Title    string  `json:"title"`
+	Score    float64 `json:"score"`
+	Bucket   float64 `json:"bucket"`
+	Year     int     `json:"year"`
+	Type     string  `json:"type"`
+	Monogram string  `json:"monogram"`
 	// Votes 是作品标注数（评分人数 = dump score_details 求和），供运行时按热度收池（RoomConfig.MinVotes）。
 	Votes    int       `json:"votes"`
 	Elements []Element `json:"elements"`
@@ -58,7 +58,7 @@ type RoomConfig struct {
 type HandRecord struct {
 	ID        int64  `json:"id"`
 	RoomID    string `json:"roomId"`
-	Seq       int    `json:"seq"` // 房间内第几手
+	Seq       int    `json:"seq"`       // 房间内第几手
 	Deck      string `json:"deck"`      // 本手牌池 JSON（[]engine.Card 形状，可回放）
 	Community string `json:"community"` // 公共牌 JSON
 	Result    string `json:"result"`    // 结算结果 JSON
@@ -100,8 +100,8 @@ type ScoreRecord struct {
 // HandLog 是一手牌的完整回放包（deck + 公共牌 + 动作序列 + 揭示账），
 // 动作日志追加式设计的验收出口：给定 HandLog 可重建整手牌过程。
 type HandLog struct {
-	Hand    HandRecord       `json:"hand"`
-	Actions []ActionRecord   `json:"actions"`
+	Hand    HandRecord        `json:"hand"`
+	Actions []ActionRecord    `json:"actions"`
 	Reveals []RevealLogRecord `json:"reveals"`
 }
 

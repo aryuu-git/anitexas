@@ -33,8 +33,8 @@ type ticket struct {
 // 防顶号（ticket_in_use）：核销绑定连接，活跃连接占用期间同 ticket 再核销拒绝；
 // 原连接断开（Release）后 TTL 内仍可核销，兼顾重连与顶号防护。
 type TicketStore struct {
-	mu     sync.Mutex
-	ttl    time.Duration
+	mu      sync.Mutex
+	ttl     time.Duration
 	tickets map[string]ticket
 }
 

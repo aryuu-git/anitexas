@@ -10,12 +10,12 @@ import (
 
 // goldenCard 是黄金夹具的单张牌(engine/testdata/golden.json,与引擎黄金测试同源)。
 type goldenCard struct {
-	ID     int64   `json:"id"`
-	Key    string  `json:"key"`
-	Title  string  `json:"title"`
-	Score  float64 `json:"score"`
-	Bucket float64 `json:"bucket"`
-	Year   int     `json:"year"`
+	ID       int64   `json:"id"`
+	Key      string  `json:"key"`
+	Title    string  `json:"title"`
+	Score    float64 `json:"score"`
+	Bucket   float64 `json:"bucket"`
+	Year     int     `json:"year"`
 	Elements []struct {
 		Class int    `json:"class"`
 		Value string `json:"value"`

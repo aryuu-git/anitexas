@@ -14,9 +14,20 @@ export interface QuickBetProps {
   onPick: (amount: number) => void
   /** 全下动作 */
   onAllin: () => void
+  /** 全下按钮文案（二次确认时由调用方切换） */
+  allinLabel?: string
 }
 
-export function QuickBet({ pot, currentBet, min, myChips, disabled = false, onPick, onAllin }: QuickBetProps) {
+export function QuickBet({
+  pot,
+  currentBet,
+  min,
+  myChips,
+  disabled = false,
+  onPick,
+  onAllin,
+  allinLabel = '全下',
+}: QuickBetProps) {
   // 候选目标先夹紧到 [min, myChips]（短码时贴住余量，走「全下」路径）
   const floor = Math.min(min, myChips)
   const items: { label: string; amount: number }[] = [
@@ -45,7 +56,7 @@ export function QuickBet({ pot, currentBet, min, myChips, disabled = false, onPi
         onClick={onAllin}
         className="rounded-chip border border-danger/40 bg-danger/10 px-2.5 py-1 text-micro text-danger transition-[transform,border-color,background-color,opacity] duration-fast ease-standard hover:-translate-y-px hover:border-danger/60 disabled:pointer-events-none disabled:opacity-40"
       >
-        全下
+        {allinLabel}
       </button>
     </div>
   )

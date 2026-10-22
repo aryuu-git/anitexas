@@ -11,14 +11,14 @@ import (
 func TestTransitionTable(t *testing.T) {
 	all := []string{PhaseWaiting, PhaseDealing, PhaseBetting, PhaseShowdown, PhaseSettled}
 	want := map[[2]string]bool{
-		{PhaseWaiting, PhaseDealing}:   true,
-		{PhaseDealing, PhaseBetting}:   true,
-		{PhaseBetting, PhaseBetting}:   true, // 街推进(preflop->flop->turn->river)
-		{PhaseBetting, PhaseShowdown}:  true, // 摊牌
-		{PhaseBetting, PhaseSettled}:   true, // 摊牌前弃牌即刻结算
-		{PhaseShowdown, PhaseSettled}:  true,
-		{PhaseSettled, PhaseWaiting}:   true, // 清桌回等待
-		{PhaseSettled, PhaseDealing}:   true, // 一手牌结束后重开
+		{PhaseWaiting, PhaseDealing}:  true,
+		{PhaseDealing, PhaseBetting}:  true,
+		{PhaseBetting, PhaseBetting}:  true, // 街推进(preflop->flop->turn->river)
+		{PhaseBetting, PhaseShowdown}: true, // 摊牌
+		{PhaseBetting, PhaseSettled}:  true, // 摊牌前弃牌即刻结算
+		{PhaseShowdown, PhaseSettled}: true,
+		{PhaseSettled, PhaseWaiting}:  true, // 清桌回等待
+		{PhaseSettled, PhaseDealing}:  true, // 一手牌结束后重开
 	}
 	illegal := 0
 	for _, from := range all {

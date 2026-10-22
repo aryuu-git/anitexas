@@ -5,16 +5,27 @@
  * 隐藏数据纪律（D7）：未揭示牌对象没有 elements 字段，这里不做任何臆造/补默认值。
  */
 import type {
+  ActionType,
   BoxCard,
   CardData,
+  CommandReceipt,
   EmoteKey,
   Envelope,
+  ExperienceEvent,
+  HandResult,
+  NextHandPolicy,
+  Participation,
   Phase,
   PoolInfo,
+  Readiness,
+  RemovalReason,
   RevealRecord,
+  RoomStatus,
   SeatState,
   SettledPayload,
   ShowdownHand,
+  StateFrame,
+  ViewerStatus,
 } from './types'
 import { DEFAULT_TURN_MS } from './types'
 
@@ -82,6 +93,47 @@ export interface RoomState {
   pool: PoolInfo | null
   /** 下一手自动开局时刻（epoch ms，nextHand 排程；null = 未排程） */
   nextHandAt: number | null
+  // ===== v2 权威状态（state 帧整体替换）=====
+  /** 是否已收到 v2 权威状态帧（连接打开 ≠ 已同步） */
+  live: boolean
+  /** wire 协议版本（0 = 仅收到旧版事件） */
+  protocol: number
+  /** 房间实例标识（每次创建房间唯一） */
+  roomInstanceId: string
+  /** 房间可见状态版本 */
+  revision: number
+  /** 最近一帧的服务端时刻（epoch ms） */
+  serverNow: number
+  /** 房间生命周期状态 */
+  roomStatus: RoomStatus
+  /** 接收者状态 */
+  viewerStatus: ViewerStatus
+  /** 离席原因 */
+  removalReason: RemovalReason | null
+  /** 接收者参局状态 */
+  participation: Participation
+  /** 开局准备度（服务端计算） */
+  readiness: Readiness
+  /** 服务端给出的合法动作 */
+  legalActions: ActionType[]
+  /** 跟齐所需增量（可大于剩余筹码） */
+  callAmount: number
+  /** 合法最小加注目标（null = 不可加注） */
+  minRaiseTo: number | null
+  /** 本轮已下注 + 剩余筹码 */
+  maxRaiseTo: number
+  /** 倒计时归零后的自动动作 */
+  timeoutAction: 'check' | 'fold' | null
+  /** 全下直发 */
+  runout: boolean
+  /** 最近一手服务端结算摘要 */
+  lastResult: HandResult | null
+  /** 按视角过滤的过程历史（去重、限量） */
+  recentEvents: ExperienceEvent[]
+  /** 服务端实际生效的下一手策略 */
+  nextHandPolicy: NextHandPolicy
+  /** 命令回执（requestId → receipt） */
+  receipts: Record<string, CommandReceipt>
 }
 
 /** 初始态（连接建立前的空桌） */
@@ -117,6 +169,26 @@ export function createRoomState(): RoomState {
     box: [],
     pool: null,
     nextHandAt: null,
+    live: false,
+    protocol: 0,
+    roomInstanceId: '',
+    revision: 0,
+    serverNow: 0,
+    roomStatus: 'waiting',
+    viewerStatus: 'seated',
+    removalReason: null,
+    participation: 'not_started',
+    readiness: { eligibleSeats: [], readySeats: [], blockers: [] },
+    legalActions: [],
+    callAmount: 0,
+    minRaiseTo: null,
+    maxRaiseTo: 0,
+    timeoutAction: null,
+    runout: false,
+    lastResult: null,
+    recentEvents: [],
+    nextHandPolicy: 'manual',
+    receipts: {},
   }
 }
 
@@ -124,15 +196,141 @@ export function createRoomState(): RoomState {
 const HOLE_CARDS_PER_SEAT = 2
 
 /**
- * 事件归约入口。乱序旧事件按 seq 基线过滤（snapshot 例外：全量真源，始终采纳并推进基线）；
- * 服务端扩展字段（turnSeat/deadline/minRaise）存在时以服务端为权威，缺省按座位轮转推算。
+ * 事件归约入口。v2 以 state 帧整体替换权威数据；旧版增量仅用于尚未收到 state 帧的兼容路径。
+ * 乱序过滤：state 按 roomInstanceId + revision；legacy 事件按 seq 基线。
  */
 export function applyEvent(state: RoomState, env: Envelope): RoomState {
+  if (env.t === 'state') return applyStateFrame(state, env as Envelope<StateFrame>)
+  // 已进入 v2：桌面数据只认 state 帧；聊天/表情/错误不属于权威状态，仍可增量
+  if (state.protocol >= 2 && env.t !== 'emoted' && env.t !== 'said' && env.t !== 'error') {
+    return state
+  }
   // 丢弃 seq ≤ 基线的在途旧事件（含快照后才补到的乱序事件，消 R4 时序伪影）
   if (env.t !== 'snapshot' && typeof env.seq === 'number' && env.seq <= state.seq) return state
   const next = reduceEvent(state, env)
   if (env.t === 'snapshot' || typeof env.seq !== 'number') return next
   return { ...next, seq: Math.max(next.seq, env.seq) }
+}
+
+/** 过程历史上限（与服务端 recentEventLimit 同量级） */
+const EVENT_LOG_LIMIT = 40
+
+/** 合并过程事件（按 eventId 去重，保留最近 N 条） */
+function mergeEvents(prev: ExperienceEvent[], incoming: ExperienceEvent[] | undefined): ExperienceEvent[] {
+  if (!incoming || incoming.length === 0) return prev
+  const seen = new Set(prev.map((e) => e.eventId))
+  const merged = [...prev]
+  for (const ev of incoming) {
+    if (seen.has(ev.eventId)) continue
+    seen.add(ev.eventId)
+    merged.push(ev)
+  }
+  return merged.slice(-EVENT_LOG_LIMIT)
+}
+
+/**
+ * v2 权威状态帧归约：state 整体替换桌面数据，events 只进历史，receipts 只按 requestId 记账。
+ * 实例变化（同码重建）清空旧私牌/结算/历史；相同实例较小 revision 丢弃；相同 revision 只合并回执。
+ */
+export function applyStateFrame(state: RoomState, env: Envelope<StateFrame>): RoomState {
+  const frame = env.p
+  if (!frame || frame.protocolVersion < 2) return state
+  // 实例变化：清空所有旧权威数据（含私牌），保留本地界面偏好（音效/封面由组件自管）
+  const newInstance = state.roomInstanceId !== '' && state.roomInstanceId !== frame.roomInstanceId
+  if (!newInstance && frame.revision < state.revision) return state
+  // 同 revision 短路仅在已 live 时成立：客户端初值与服务端首帧都可能是 0，
+  // 首次帧必须落库并置 live（否则安静房间的 join 帧会被当成重复帧丢掉）。
+  if (!newInstance && frame.revision === state.revision && state.live) {
+    const receipts = mergeReceipts(state.receipts, frame.receipts)
+    const recentEvents = mergeEvents(state.recentEvents, frame.events)
+    if (receipts === state.receipts && recentEvents === state.recentEvents) return state
+    return { ...state, live: true, receipts, recentEvents }
+  }
+  const p = frame.state
+  const base = newInstance ? createRoomState() : state
+  // 同一手的结算/摊牌投影复用引用：音效与特效按引用变化触发，重复帧不得重播
+  const sameHand = !newInstance && state.handSeq === p.handSeq
+  const nextShowdown =
+    p.lastResult && (p.phase === 'showdown' || p.phase === 'settled')
+      ? p.lastResult.showdown ?? null
+      : null
+  const nextSettled =
+    p.lastResult && p.phase === 'settled'
+      ? { rows: p.lastResult.rows, potWins: p.lastResult.potWins }
+      : null
+  return {
+    ...base,
+    roomCode: p.roomCode,
+    autoReveal: p.autoReveal,
+    phase: p.phase,
+    handSeq: p.handSeq,
+    seats: (p.seats ?? []).map((s) => ({
+      ...s,
+      ready: s.ready ?? false,
+      rebuys: s.rebuys ?? 0,
+      occupantKind: s.occupantKind ?? (s.nick ? 'human' : 'empty'),
+      connection: s.connection ?? 'not_applicable',
+    })),
+    mySeat: p.mySeat,
+    myCards: p.myCards ?? [],
+    community: p.community ?? [],
+    pot: p.pot,
+    currentBet: p.currentBet,
+    turnSeat: p.turnSeat,
+    deadline: p.deadline ?? null,
+    smallBlind: p.smallBlind,
+    bigBlind: p.bigBlind,
+    revealRate: p.revealRate,
+    reveals: p.reveals ?? [],
+    emotes: state.emotes,
+    chat: newInstance ? [] : state.chat,
+    chatEnabled: p.chatEnabled ?? true,
+    seedCommit: p.seedCommit ?? null,
+    seedReveal: p.seed ?? null,
+    showdown: sameHand && state.showdown && nextShowdown ? state.showdown : nextShowdown,
+    settled: sameHand && state.settled && nextSettled ? state.settled : nextSettled,
+    lastError: state.lastError,
+    seq: Math.max(state.seq, p.seq ?? 0),
+    minRaise: p.minRaise ?? state.minRaise,
+    turnMs: p.turnMs ?? DEFAULT_TURN_MS,
+    box: p.box ?? [],
+    pool: p.pool ?? null,
+    nextHandAt: p.nextHandAt ?? null,
+    live: true,
+    protocol: frame.protocolVersion,
+    roomInstanceId: frame.roomInstanceId,
+    revision: frame.revision,
+    serverNow: frame.serverNow,
+    roomStatus: p.roomStatus ?? 'waiting',
+    viewerStatus: p.viewerStatus ?? 'seated',
+    removalReason: p.removalReason ?? null,
+    participation: p.participation ?? 'not_started',
+    readiness: p.readiness ?? { eligibleSeats: [], readySeats: [], blockers: [] },
+    legalActions: p.legalActions ?? [],
+    callAmount: p.callAmount ?? 0,
+    minRaiseTo: p.minRaiseTo ?? null,
+    maxRaiseTo: p.maxRaiseTo ?? 0,
+    timeoutAction: p.timeoutAction ?? null,
+    runout: p.runout ?? false,
+    lastResult: p.lastResult ?? null,
+    recentEvents: mergeEvents(newInstance ? [] : state.recentEvents, [
+      ...(p.recentEvents ?? []),
+      ...(frame.events ?? []),
+    ]),
+    nextHandPolicy: p.nextHandPolicy ?? 'manual',
+    receipts: mergeReceipts(newInstance ? {} : state.receipts, frame.receipts),
+  }
+}
+
+/** 合并命令回执（同 requestId 以新回执为准） */
+function mergeReceipts(
+  prev: Record<string, CommandReceipt>,
+  incoming: CommandReceipt[] | undefined,
+): Record<string, CommandReceipt> {
+  if (!incoming || incoming.length === 0) return prev
+  const next = { ...prev }
+  for (const r of incoming) next[r.requestId] = r
+  return next
 }
 
 /** 归约一步（seq 过滤与基线推进由 applyEvent 统一处理） */
@@ -144,6 +342,7 @@ function reduceEvent(state: RoomState, env: Envelope): RoomState {
       // 同一手的快照不清结算态（重连不关结算面板）；换手快照按新一手清空（防上一手残留）。
       const sameHand = state.handSeq > 0 && p.handSeq === state.handSeq
       return {
+        ...state,
         roomCode: p.roomCode,
         autoReveal: p.autoReveal,
         phase: p.phase,

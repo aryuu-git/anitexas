@@ -17,23 +17,23 @@ import (
 // 动作/操作错误码:Submit/Reveal/Join 等同步回 error 的 Code,ServerRuntime
 // 可转成 error 事件下发;任何错误都不得回显隐藏数据(D7)。
 const (
-	CodeBadState         = "bad_state"          // 阶段/时机不对
-	CodeBadSeat          = "bad_seat"           // 座位号非法
-	CodeNotInPlay        = "not_in_play"        // 未入座或已离桌
-	CodeNotYourTurn      = "not_your_turn"      // 非轮到者
-	CodeBadAction        = "bad_action"         // 未知动作类型
-	CodeBadAmount        = "bad_amount"         // 金额非法(负数/目标不合法)
-	CodeChipOverbet      = "chip_overbet"       // 超额下注(超出自身筹码)
-	CodeMinBet           = "min_bet"            // 下注低于最小下注
-	CodeMinRaise         = "min_raise"          // 加注低于最小加注
-	CodeNoBet            = "no_bet"             // 无注可跟/无注可加
-	CodeCheckFacingBet   = "check_facing_bet"   // 面对下注不能过牌
-	CodeNotYourCard       = "not_your_card"       // 对手底牌不可揭示(D2)
-	CodeBadCard           = "bad_card"            // 非本手的牌
-	CodeBadScope          = "bad_scope"           // 可见范围非法
-	CodeDeckExhausted     = "deck_exhausted"      // 牌堆余量不足一手牌
-	CodeRebuyExhausted    = "rebuy_exhausted"     // 重买次数用尽(MAX_REBUYS)
-	CodeInternal          = "internal"
+	CodeBadState       = "bad_state"        // 阶段/时机不对
+	CodeBadSeat        = "bad_seat"         // 座位号非法
+	CodeNotInPlay      = "not_in_play"      // 未入座或已离桌
+	CodeNotYourTurn    = "not_your_turn"    // 非轮到者
+	CodeBadAction      = "bad_action"       // 未知动作类型
+	CodeBadAmount      = "bad_amount"       // 金额非法(负数/目标不合法)
+	CodeChipOverbet    = "chip_overbet"     // 超额下注(超出自身筹码)
+	CodeMinBet         = "min_bet"          // 下注低于最小下注
+	CodeMinRaise       = "min_raise"        // 加注低于最小加注
+	CodeNoBet          = "no_bet"           // 无注可跟/无注可加
+	CodeCheckFacingBet = "check_facing_bet" // 面对下注不能过牌
+	CodeNotYourCard    = "not_your_card"    // 对手底牌不可揭示(D2)
+	CodeBadCard        = "bad_card"         // 非本手的牌
+	CodeBadScope       = "bad_scope"        // 可见范围非法
+	CodeDeckExhausted  = "deck_exhausted"   // 牌堆余量不足一手牌
+	CodeRebuyExhausted = "rebuy_exhausted"  // 重买次数用尽(MAX_REBUYS)
+	CodeInternal       = "internal"
 )
 
 // Action 是一次下注动作。Amount 语义:bet/raise 为「加到」本轮总投入的目标值,
@@ -95,28 +95,28 @@ func (c CardView) MarshalJSON() ([]byte, error) {
 // (初始可见性状态),Reveal 校验/记账/快照隐藏规则不变。
 type Config struct {
 	Seats, SmallBlind, BigBlind, StartChips, DeckSize, RevealFee int
-	TurnTimeoutMs int    // 行动倒计时(毫秒);<=0 表示不启用超时自动动作
-	MaxRebuys     int    // 每座位重买上限(MAX_REBUYS);<=0 不限次
-	AutoReveal    bool   // 开局即全部揭示(默认 false:未揭示不下发要素)
-	DeckStrategy  string // "stratified" 分层随机(默认) | "theme" 主题池
+	TurnTimeoutMs                                                int    // 行动倒计时(毫秒);<=0 表示不启用超时自动动作
+	MaxRebuys                                                    int    // 每座位重买上限(MAX_REBUYS);<=0 不限次
+	AutoReveal                                                   bool   // 开局即全部揭示(默认 false:未揭示不下发要素)
+	DeckStrategy                                                 string // "stratified" 分层随机(默认) | "theme" 主题池
 }
 
 // seatState 是座位的对局内状态(筹码/积分为跨手延续的两本账,§1.4)。
 type seatState struct {
-	inPlay     bool           // 在局(已入座)
+	inPlay     bool // 在局(已入座)
 	isBot      bool
 	nick       string
-	chips      int            // 筹码账
-	points     int            // 积分账(跨手延续)
-	hole       []engine.Card  // 本手底牌(最多 2 张)
-	bet        int            // 本轮总投入
-	committed  int            // 本手总投入(进池)
+	chips      int           // 筹码账
+	points     int           // 积分账(跨手延续)
+	hole       []engine.Card // 本手底牌(最多 2 张)
+	bet        int           // 本轮总投入
+	committed  int           // 本手总投入(进池)
 	folded     bool
 	allIn      bool
-	acted      bool           // 本轮是否已动作(快照「是否已行动」)
-	canRaise   bool           // 本轮是否仍可加注(短全下加注后置 false)
-	revealCost int            // 本手累计揭示成本
-	rebuys     int            // 本座位累计重买次数(破产重买上限判定;新入座重新计)
+	acted      bool // 本轮是否已动作(快照「是否已行动」)
+	canRaise   bool // 本轮是否仍可加注(短全下加注后置 false)
+	revealCost int  // 本手累计揭示成本
+	rebuys     int  // 本座位累计重买次数(破产重买上限判定;新入座重新计)
 }
 
 // Game 是一桌对局状态机。写操作只发生在表 goroutine(D12:单 goroutine 串行推进),
@@ -127,38 +127,39 @@ type Game struct {
 	deckPos int           // 发牌游标:一手牌消耗 2*人数+5 张(一手内不重复发牌,A3.3)
 
 	// 手牌生命周期(见 state.go 转移表)
-	state    string
-	street   string // betting 阶段的下注街
-	handSeq  int    // 手牌序号,从 1 起
-	button   int    // 庄家位(-1 表示本手未定)
-	sbSeat   int
-	bbSeat   int
-	dealt    []int // 本手发过底牌的座位(结算行范围)
+	state   string
+	street  string // betting 阶段的下注街
+	handSeq int    // 手牌序号,从 1 起
+	button  int    // 庄家位(-1 表示本手未定)
+	sbSeat  int
+	bbSeat  int
+	dealt   []int // 本手发过底牌的座位(结算行范围)
 
-	seats       []seatState
-	pot         int           // 本手注池 = Σ committed
-	currentBet  int           // 本轮最高总投入
-	minRaise    int           // 最小加注增量
-	pending     map[int]bool  // 本轮仍欠动作的座位
-	turn        int           // 当前行动座位(-1 = 无)
-	deadline    time.Time     // 行动截止(零值 = 未开倒计时)
-	timerGen    uint64        // 倒计时代数,防过期定时器误触
+	seats      []seatState
+	pot        int          // 本手注池 = Σ committed
+	currentBet int          // 本轮最高总投入
+	minRaise   int          // 最小加注增量
+	pending    map[int]bool // 本轮仍欠动作的座位
+	turn       int          // 当前行动座位(-1 = 无)
+	deadline   time.Time    // 行动截止(零值 = 未开倒计时)
+	timerGen   uint64       // 倒计时代数,防过期定时器误触
 
-	board     []engine.Card // 本手公共牌(发牌期从牌堆取出,共 5 张)
-	community []engine.Card // 已亮出的公共牌(未翻牌不出现在任何下行消息)
+	board      []engine.Card // 本手公共牌(发牌期从牌堆取出,共 5 张)
+	community  []engine.Card // 已亮出的公共牌(未翻牌不出现在任何下行消息)
+	runoutFlag bool          // 本手已进入全下直发(供快照 runout 表达)
 
-	reveals        []RevealRecord        // 本手揭示记录(结算汇入积分账)
-	publicRevealed map[int64]bool        // 已揭示且全桌可见的牌(不可逆,D3)
+	reveals        []RevealRecord         // 本手揭示记录(结算汇入积分账)
+	publicRevealed map[int64]bool         // 已揭示且全桌可见的牌(不可逆,D3)
 	revPrivate     map[int64]map[int]bool // 已私看的牌:牌 id -> 可见座位
 
 	// 表 goroutine 命令队列与事件流
-	mu      sync.Mutex
-	cond    *sync.Cond // 仅用于 Close 唤醒,主循环走 channel
-	evBuf   []Event    // 单条命令的事件暂存,保序后统一下发
-	cmds    chan gameCmd
-	events  chan Event
-	done    chan struct{} // 关闭信号
-	closed  chan struct{} // 表 goroutine 已退出
+	mu     sync.Mutex
+	cond   *sync.Cond // 仅用于 Close 唤醒,主循环走 channel
+	evBuf  []Event    // 单条命令的事件暂存,保序后统一下发
+	cmds   chan gameCmd
+	events chan Event
+	done   chan struct{} // 关闭信号
+	closed chan struct{} // 表 goroutine 已退出
 }
 
 // gameCmd 是入队的命令:fn 只在表 goroutine 执行,resp 带回同步结果。
@@ -259,10 +260,17 @@ func (g *Game) loop() {
 			g.runCmd(c.fn, c.resp)
 		case <-timerC:
 			g.mu.Lock()
-			g.onTimeout(gen, seat)
+			changed := g.onTimeout(gen, seat)
 			evs := g.flushEvents()
+			var commit *CommitPayload
+			if changed {
+				commit = g.captureCommitLocked()
+			}
 			g.mu.Unlock()
 			g.emitAll(evs)
+			if commit != nil {
+				g.emitAll([]Event{{Type: EventCommit, Payload: commit}})
+			}
 		}
 	}
 }
@@ -273,11 +281,31 @@ func (g *Game) runCmd(fn func() error, resp chan error) {
 	g.mu.Lock()
 	err := fn()
 	evs := g.flushEvents()
+	// v2 事务输出：成功命令在锁内捕获全部视角快照，与事件同批交给 room 顺序投影。
+	// 失败命令不推进状态，不产生 commit（room 只回退回执）。
+	var commit *CommitPayload
+	if err == nil && (g.handSeq > 0 || g.state != PhaseWaiting) {
+		// 开局前的 Join/SetDeck 不产生可见提交，避免「playing+waiting+第 0 手」的假帧。
+		commit = g.captureCommitLocked()
+	}
 	g.mu.Unlock()
 	g.emitAll(evs)
+	if commit != nil {
+		g.emitAll([]Event{{Type: EventCommit, Payload: commit}})
+	}
 	if resp != nil {
 		resp <- err
 	}
+}
+
+// captureCommitLocked 捕获本事务的不可变状态投影（调用方持 g.mu）。
+// Snapshots 下标即座位号；隐藏数据已由 snapshotLocked 按视角裁剪。
+func (g *Game) captureCommitLocked() *CommitPayload {
+	snaps := make([]Snapshot, 0, g.cfg.Seats)
+	for seat := 0; seat < g.cfg.Seats; seat++ {
+		snaps = append(snaps, g.snapshotLocked(seat))
+	}
+	return &CommitPayload{Snapshots: snaps}
 }
 
 // flushEvents 取走并清空事件暂存(调用方持 g.mu)。
@@ -438,6 +466,7 @@ func (g *Game) doStart() error {
 	g.pot, g.currentBet, g.minRaise = 0, 0, g.cfg.BigBlind
 	g.pending = map[int]bool{}
 	g.community, g.board = nil, nil
+	g.runoutFlag = false
 	g.reveals = nil
 	g.publicRevealed = map[int64]bool{}
 	g.revPrivate = map[int64]map[int]bool{}
@@ -612,12 +641,12 @@ func (g *Game) minRaisePtr() *int {
 
 // onTimeout 超时自动动作(表 goroutine 定时回调):本轮有注 -> 弃牌,无注 -> 过牌。
 // gen 校验防止过期定时器在换行动者后误触。
-func (g *Game) onTimeout(gen uint64, seat int) {
+func (g *Game) onTimeout(gen uint64, seat int) bool {
 	if gen != g.timerGen || seat != g.turn {
-		return
+		return false
 	}
 	if g.state != PhaseBetting || g.turn < 0 {
-		return
+		return false
 	}
 	s := &g.seats[g.turn]
 	typ := "check"
@@ -626,7 +655,9 @@ func (g *Game) onTimeout(gen uint64, seat int) {
 	}
 	if err := g.applyAction(Action{Seat: seat, Type: typ}); err != nil {
 		g.emitErr(CodeInternal, "超时自动动作失败: "+err.Error())
+		return false
 	}
+	return true
 }
 
 // cardViews 构造 viewer 视角的牌面序列(隐藏规则在此兜底):

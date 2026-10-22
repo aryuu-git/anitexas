@@ -128,7 +128,7 @@ func TestTimeoutFacesBetFolds(t *testing.T) {
 	g := newTestGame(t, Config{TurnTimeoutMs: 50}, 2,
 		headsUpDeck(dudCard(11), dudCard(12), dudCard(13), dudCard(14), board))
 	g.Start()
-	drain(g)                                 // 清掉发牌事件
+	drain(g)                                  // 清掉发牌事件
 	evs := waitEvents(t, g, 2, 3*time.Second) // acted(超时弃牌) + settled
 	acted, ok := findEvent(t, evs, EventActed).(*ActedPayload)
 	if !ok || acted.Seat != 0 || acted.Type != "fold" {
@@ -148,9 +148,10 @@ func TestTimeoutNoBetChecks(t *testing.T) {
 	g := newTestGame(t, Config{TurnTimeoutMs: 50}, 2,
 		headsUpDeck(dudCard(11), dudCard(12), dudCard(13), dudCard(14), board))
 	g.Start()
-	drain(g)                                  // 清掉发牌事件
+	drain(g)                                        // 清掉发牌事件
 	mustSubmit(t, g, Action{Seat: 0, Type: "call"}) // 小盲补齐,大盲无注可跟
-	evs := waitEvents(t, g, 2, 3*time.Second) // acted(call) + acted(超时过牌)
+	// acted(call)+commit / acted(超时过牌)+commit：v2 每次成功命令追加事务提交事件
+	evs := waitEvents(t, g, 4, 3*time.Second)
 	checked := false
 	for _, ev := range evs {
 		if acted, ok := ev.Payload.(*ActedPayload); ok && acted.Seat == 1 && acted.Type == "check" {
@@ -200,9 +201,18 @@ func TestMinRaiseUpdatesAndPayload(t *testing.T) {
 	if got := g.MinRaise(); got != 20 {
 		t.Fatalf("短全下加注后 minRaise = %d,期望仍 20", got)
 	}
-	// 短全下加注不重开加注权:seat0 只能跟/弃
+	// 短全下加注不重开加注权:seat0 只能跟/弃；legalActions 不得给 raise/allin
+	// （全下若超过当前注同样是加注，必须一并禁用）。
 	if err := g.Submit(Action{Seat: 0, Type: "raise", Amount: 70}); errorCodeOf(err) != CodeMinRaise {
 		t.Fatalf("短全下加注后应不可再加注,实际 %v", err)
+	}
+	if err := g.Submit(Action{Seat: 0, Type: "allin"}); errorCodeOf(err) != CodeMinRaise {
+		t.Fatalf("短全下后全下加注也应被拒,实际 %v", err)
+	}
+	for _, a := range g.SnapshotFor(0).LegalActions {
+		if a == "raise" || a == "allin" {
+			t.Fatalf("短全下后 legalActions 不应列出 %s: %v", a, g.SnapshotFor(0).LegalActions)
+		}
 	}
 
 	// 跟注收轮 -> 全下扎堆直发街:flipStreet 载荷 minRaise 重置为大盲 10

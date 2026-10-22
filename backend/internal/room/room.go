@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"anitexas/backend/internal/engine"
 	"anitexas/backend/internal/game"
 	"anitexas/backend/internal/model"
@@ -27,9 +29,11 @@ var (
 	ErrRoomClosed = errors.New("房间已解散")
 	ErrRoomFull   = errors.New("房间已满")
 	ErrBadSeat    = errors.New("座位无效")
-	ErrNotPlaying = errors.New("当前没有进行中的牌局")
-	ErrBadEmote   = errors.New("表情 key 非法")
-	ErrEmoteCool  = errors.New("表情冷却中，10 秒一次")
+	// ErrNickTaken 是同昵称但无恢复凭据（v2 身份契约：不静默抢占他人座位）。
+	ErrNickTaken    = errors.New("nick_taken: 昵称已被占用，请换一个或使用原设备恢复")
+	ErrNotPlaying   = errors.New("当前没有进行中的牌局")
+	ErrBadEmote     = errors.New("表情 key 非法")
+	ErrEmoteCool    = errors.New("表情冷却中，10 秒一次")
 	ErrChatDisabled = errors.New("房主已关闭聊天")
 	ErrChatTooLong  = errors.New("发言超长（≤120 字）")
 	ErrChatThrottle = errors.New("发言太快，稍候再发")
@@ -53,6 +57,11 @@ type occupant struct {
 	detachedAt time.Time
 	// pendingLeave 为「局内离座、手牌结束后生效」标记。
 	pendingLeave bool
+	// v2 身份：participantId 是房间实例内的稳定玩家标识，resumeToken 是其恢复凭据。
+	participantID string
+	resumeToken   string
+	// joinRequestID 是最近一次 REST 加入请求 id（幂等：重复请求复用同座位）。
+	joinRequestID string
 }
 
 // Summary 是 REST 房间列表条目。
@@ -65,6 +74,12 @@ type Summary struct {
 	Seats      int    `json:"seats"`
 	Players    int    `json:"players"` // 已占座人数（含 bot）
 	Status     string `json:"status"`
+	// ===== v2 预览扩展（首页/加入预览）=====
+	Phase      string `json:"phase"` // waiting | preflop | ... | settled
+	HandSeq    int    `json:"handSeq"`
+	HumanCount int    `json:"humanCount"`
+	BotCount   int    `json:"botCount"`
+	Joinable   bool   `json:"joinable"`
 }
 
 // preppedDeck 是预生成好的一手牌盒 + 其种子（种子用于可验证发牌固证，frontend-contract §2）。
@@ -112,11 +127,11 @@ func (tm Timing) reapAutoInterval() time.Duration {
 type Room struct {
 	mu sync.Mutex
 
-	id   string // rooms.id（uuid）
-	code string // 6 位房间码
-	host string // 房主昵称（展示用）
-	cfg  model.RoomConfig
-	bot  BotParams
+	id                 string // rooms.id（uuid）
+	code               string // 6 位房间码
+	host               string // 房主昵称（展示用）
+	cfg                model.RoomConfig
+	bot                BotParams
 	turnTimeoutSeconds int
 
 	st      *store.Store
@@ -164,15 +179,32 @@ type Room struct {
 	botRaisePhase map[int]string
 
 	// 节奏参数（Timing 注入；零值 = 机制关闭，见 Timing 注释）。
-	timing         Timing
-	nextHandTimer  *time.Timer // 下一手自动开局定时器
-	reapTimer      *time.Timer // 断线/空闲巡检定时器（自续排程）
-	emptySince     time.Time   // 无在座人类的起算时刻（空闲房回收 TTL 起点）
-	poolFallback   bool        // 主题过滤过窄已回退全库（PoolInfo.fallback 真源）
-	seedRevealed   bool        // 本手 seed 已揭示（摊牌后可见，之前 snapshot.seed 为 null）
+	timing        Timing
+	nextHandTimer *time.Timer // 下一手自动开局定时器
+	reapTimer     *time.Timer // 断线/空闲巡检定时器（自续排程）
+	emptySince    time.Time   // 无在座人类的起算时刻（空闲房回收 TTL 起点）
+	poolFallback  bool        // 主题过滤过窄已回退全库（PoolInfo.fallback 真源）
+	seedRevealed  bool        // 本手 seed 已揭示（摊牌后可见，之前 snapshot.seed 为 null）
 
-	stopCh   chan struct{}
-	closed   bool
+	// ===== v2 权威状态（见 state.go）=====
+	revision        int64                   // 房间可见状态版本（每次可见事务 +1）
+	latestSnapshots []model.SnapshotPayload // 最近一次事务的全座位快照（按座位视角）
+	latestValid     bool
+	pendingEvents   []pendingEvent                          // 待随下一帧下发的过程事件
+	pendingReceipts map[int][]model.CommandReceipt          // 待随下一帧下发的命令回执（按座位）
+	receipts        map[int]map[string]model.CommandReceipt // 命令回执去重缓存
+	eventSeq        int64
+	recentEvents    []model.ExperienceEvent
+	lastResult      *model.HandResult
+	nextHandAt      *int64
+	// recaptureCommits 表示接下来 N 个 game commit 需以 game 当前状态重拍
+	// （结算后 room 立即重买/离席，commit 快照是处置前的旧筹码）。
+	recaptureCommits int
+	// handShowdown 是本手摊牌快照（结算摘要的 showdown 区）。
+	handShowdown []model.ShowdownHand
+
+	stopCh     chan struct{}
+	closed     bool
 	onDissolve func(*Room) // 解散回调（Manager 摘除索引）
 }
 
@@ -181,23 +213,25 @@ type Room struct {
 func NewRoom(id, code, host string, cfg model.RoomConfig, turnTimeoutSeconds int, bot BotParams,
 	library []engine.Card, st *store.Store, onDissolve func(*Room), timing Timing) *Room {
 	r := &Room{
-		id:   id,
-		code: code,
-		host: host,
-		cfg:  cfg,
-		bot:  bot,
+		id:                 id,
+		code:               code,
+		host:               host,
+		cfg:                cfg,
+		bot:                bot,
 		turnTimeoutSeconds: turnTimeoutSeconds,
-		st:      st,
-		library: library,
-		seats:   make([]*occupant, cfg.Seats),
-		status:  model.StatusWaiting,
-		emoteAt: make(map[int]time.Time),
-		chatAt:  make(map[int]time.Time),
-		botRaiseCount: make(map[int]int),
-		botRaisePhase: make(map[int]string),
-		timing:  timing,
-		stopCh:  make(chan struct{}),
-		onDissolve: onDissolve,
+		st:                 st,
+		library:            library,
+		seats:              make([]*occupant, cfg.Seats),
+		status:             model.StatusWaiting,
+		emoteAt:            make(map[int]time.Time),
+		chatAt:             make(map[int]time.Time),
+		botRaiseCount:      make(map[int]int),
+		botRaisePhase:      make(map[int]string),
+		receipts:           make(map[int]map[string]model.CommandReceipt),
+		pendingReceipts:    make(map[int][]model.CommandReceipt),
+		timing:             timing,
+		stopCh:             make(chan struct{}),
+		onDissolve:         onDissolve,
 	}
 	r.deckLib = r.computeDeckLib()
 	r.scheduleReapLocked() // 巡检（断线回收/空闲房回收）自续排程，Close 时停
@@ -206,9 +240,10 @@ func NewRoom(id, code, host string, cfg model.RoomConfig, turnTimeoutSeconds int
 
 // computeDeckLib 算本桌抽盒用卡库（D11 主题池 = 过滤后再分层，frontend-contract §3）：
 // 先按作品标注数下限收池（RoomConfig.MinVotes，运行时热度筛选），再走主题过滤：
-// - MinVotes > 0 时先 FilterMinVotes；过滤后不足以撑 DeckSize 时回退全库并记日志
-//   （与主题回退同语义，防过窄开局失败）；
-// - theme 策略且带 themeFilter 时再按过滤项筛卡库；结果不足以撑 DeckSize 时回退全库并记日志。
+//   - MinVotes > 0 时先 FilterMinVotes；过滤后不足以撑 DeckSize 时回退全库并记日志
+//     （与主题回退同语义，防过窄开局失败）；
+//   - theme 策略且带 themeFilter 时再按过滤项筛卡库；结果不足以撑 DeckSize 时回退全库并记日志。
+//
 // 一次性算定后存 r.deckLib，多手复用（帧缓存按稳定切片命中，R1）。
 func (r *Room) computeDeckLib() []engine.Card {
 	lib := r.library
@@ -255,59 +290,122 @@ func (r *Room) Status() string {
 func (r *Room) Summary() Summary {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	players := 0
+	players, humans, bots := 0, 0, 0
 	for _, o := range r.seats {
 		if o != nil {
 			players++
+			if o.isBot {
+				bots++
+			} else {
+				humans++
+			}
 		}
+	}
+	phase := model.PhaseWaiting
+	if r.game != nil {
+		phase = string(r.game.SnapshotFor(0).Phase)
 	}
 	return Summary{
 		Code: r.code, Host: r.host, AutoReveal: r.cfg.AutoReveal,
 		SmallBlind: r.cfg.SmallBlind, BigBlind: r.cfg.BigBlind,
 		Seats: r.cfg.Seats, Players: players, Status: r.status,
+		Phase: phase, HandSeq: r.handSeq, HumanCount: humans, BotCount: bots,
+		Joinable: r.status != model.StatusClosed,
 	}
 }
 
-// Join 占座（REST POST /api/rooms/{code}/join）：同昵称复用原座位（断线重连，A4.3），
-// 否则取空位；无空位时替换 bot（A4.4「人来了可替换」），全满报错。
+// Join 是兼容 v1 的占座入口（同昵称静默复用座位）。REST 走 JoinIdentity。
 func (r *Room) Join(nick string) (int, error) {
+	seat, _, _, err := r.joinLocked(nick, "", "", "", false)
+	return seat, err
+}
+
+// JoinIdentity 是 v2 占座：凭 resumeToken 恢复原座位；无凭据的同昵称请求返回
+// ErrNickTaken（不静默抢占他人身份）；新入座签发 participantId + resumeToken。
+func (r *Room) JoinIdentity(nick, resumeToken, requestID, roomInstance string) (int, string, string, error) {
+	return r.joinLocked(nick, resumeToken, requestID, roomInstance, true)
+}
+
+func (r *Room) joinLocked(nick, resumeToken, requestID, roomInstance string, strict bool) (int, string, string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.status == model.StatusClosed {
-		return -1, ErrRoomClosed
+		return -1, "", "", ErrRoomClosed
 	}
-	// 断线重连：同昵称找回原座位。
-	for i, o := range r.seats {
-		if o != nil && !o.isBot && o.nick == nick {
-			return i, nil
+	if roomInstance != "" && roomInstance != r.id {
+		return -1, "", "", errStaleState
+	}
+	// 凭据恢复：resumeToken 命中即回原座位（昵称以座位为准）。
+	if resumeToken != "" {
+		for i, o := range r.seats {
+			if o != nil && !o.isBot && o.resumeToken == resumeToken {
+				o.detachedAt = time.Time{}
+				if requestID != "" {
+					o.joinRequestID = requestID
+				}
+				return i, o.participantID, o.resumeToken, nil
+			}
+		}
+	}
+	// 幂等：同一 joinRequestId 重复请求复用同座位。
+	if requestID != "" {
+		for i, o := range r.seats {
+			if o != nil && o.joinRequestID == requestID {
+				return i, o.participantID, o.resumeToken, nil
+			}
+		}
+	}
+	// 兼容旧客户端：同昵称静默复用原座位。
+	if !strict {
+		for i, o := range r.seats {
+			if o != nil && !o.isBot && o.nick == nick {
+				return i, o.participantID, o.resumeToken, nil
+			}
+		}
+	} else {
+		for _, o := range r.seats {
+			if o != nil && !o.isBot && o.nick == nick {
+				return -1, "", "", ErrNickTaken
+			}
 		}
 	}
 	// 空位优先。
 	for i, o := range r.seats {
 		if o == nil {
-			r.seats[i] = &occupant{nick: nick}
-			return i, nil
+			pid, token := newIdentity()
+			r.seats[i] = &occupant{nick: nick, participantID: pid, resumeToken: token, joinRequestID: requestID}
+			return i, pid, token, nil
 		}
 	}
 	// 替换 bot：继承座位与在局状态，立即改绑 game 侧昵称。
 	for i, o := range r.seats {
 		if o.isBot {
+			pid, token := newIdentity()
 			o.isBot = false
 			o.nick = nick
 			o.ready = false
 			o.link = nil
+			o.participantID = pid
+			o.resumeToken = token
+			o.joinRequestID = requestID
 			if o.joined && r.game != nil {
 				if err := r.game.Join(i, nick, false); err != nil {
 					slog.Warn("替换 bot 后改绑 game 失败", "room", r.code, "seat", i, "err", err)
 				}
 			}
-			return i, nil
+			return i, pid, token, nil
 		}
 	}
-	return -1, ErrRoomFull
+	return -1, "", "", ErrRoomFull
+}
+
+// newIdentity 生成房间实例内的玩家标识与恢复凭据。
+func newIdentity() (participantID, resumeToken string) {
+	return "p_" + uuid.NewString(), "r_" + uuid.NewString()
 }
 
 // Attach 挂接 WS 连接并直发全量快照（join 握手成功后；断线重连同样走这里恢复，A4.3）。
+// v2：同时下发权威 state 帧（reason=join），客户端据此进入 live。
 func (r *Room) Attach(seat int, link Link) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -318,6 +416,12 @@ func (r *Room) Attach(seat int, link Link) error {
 	r.seats[seat].pendingLeave = false
 	r.seats[seat].detachedAt = time.Time{} // 重连成功，断线计时清零
 	r.sendLocked(seat, model.TypeSnapshot, r.snapshotLocked(seat))
+	var receipts []model.CommandReceipt
+	if len(r.pendingReceipts[seat]) > 0 {
+		receipts = r.pendingReceipts[seat]
+		delete(r.pendingReceipts, seat)
+	}
+	r.sendStateLocked(seat, stateReasonJoin, nil, receipts)
 	r.tickBotsLocked()
 	return nil
 }
@@ -325,10 +429,22 @@ func (r *Room) Attach(seat int, link Link) error {
 // Detach 摘除 WS 连接（断线）。座位保留，掉线期间由 bot 策略代打；
 // 记录断线时刻，超 DISCONNECT_GRACE_SECONDS 由巡检自动离席（reapLocked）。
 func (r *Room) Detach(seat int) {
+	r.detachLink(seat, nil)
+}
+
+// DetachLink 只摘除指定连接（连接代际保护：旧连接延迟关闭不会踢掉新连接）。
+func (r *Room) DetachLink(seat int, link Link) {
+	r.detachLink(seat, link)
+}
+
+func (r *Room) detachLink(seat int, link Link) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil {
 		return
+	}
+	if link != nil && r.seats[seat].link != link {
+		return // 旧连接：已不是当前下行通道
 	}
 	r.seats[seat].link = nil
 	r.seats[seat].detachedAt = time.Now()
@@ -337,18 +453,50 @@ func (r *Room) Detach(seat int) {
 
 // Ready 准备开局：全员人类准备即开（bot 自动补位，A3.5/A4.4）。每手消耗一次准备。
 func (r *Room) Ready(seat int) error {
+	return r.ReadyWithMeta(seat, model.CommandMeta{})
+}
+
+// ReadyWithMeta 是 v2 准备命令：去重回执 + expected 校验；无开局时也下发新状态帧。
+func (r *Room) ReadyWithMeta(seat int, meta model.CommandMeta) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil || r.seats[seat].isBot {
 		return ErrBadSeat
 	}
+	if rc, ok := r.lookupReceiptLocked(seat, meta.RequestID); ok {
+		r.replayReceiptLocked(seat, rc)
+		return nil
+	}
+	if err := r.validateMetaLocked(meta); err != nil {
+		r.rejectCommandLocked(seat, meta.RequestID, "stale_state", err.Error())
+		return err
+	}
 	if r.status != model.StatusWaiting {
-		return nil // 局中准备 = 预约下一手，v1 简化为忽略
+		// 局中准备 = 预约下一手（v1 简化为忽略），仍回 applied 让客户端停止 pending。
+		r.queueAppliedReceiptLocked(seat, meta.RequestID)
+		r.flushReceiptLocked(seat)
+		return nil
 	}
 	r.seats[seat].ready = true
+	r.queueAppliedReceiptLocked(seat, meta.RequestID)
 	r.broadcastLocked(model.TypeReadied, model.ReadiedPayload{Seat: seat}) // 准备标记广播（每手重置）
+	before := r.status
 	r.maybeStartLocked()
+	if r.status == before {
+		// 未开局（还有人没准备）：准备状态本身需要新的权威帧。
+		r.refreshStateLocked()
+	}
 	return nil
+}
+
+// flushReceiptLocked 立即把某座位的待发回执随一帧状态发出（不改变 revision）。
+func (r *Room) flushReceiptLocked(seat int) {
+	receipts := r.pendingReceipts[seat]
+	if len(receipts) == 0 {
+		return
+	}
+	delete(r.pendingReceipts, seat)
+	r.sendStateToSeatLocked(seat, stateReasonMutation, nil, receipts)
 }
 
 // Action 提交下注动作（上行 action；amount 语义 = bet/raise「加到」本轮总投入目标）。
@@ -359,14 +507,25 @@ func (r *Room) Action(seat int, a model.ActionPayload) error {
 	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil {
 		return ErrBadSeat
 	}
+	if rc, ok := r.lookupReceiptLocked(seat, a.RequestID); ok {
+		r.replayReceiptLocked(seat, rc)
+		return nil
+	}
+	if err := r.validateMetaLocked(a.CommandMeta); err != nil {
+		r.rejectCommandLocked(seat, a.RequestID, "stale_state", err.Error())
+		return err
+	}
 	if r.game == nil {
+		r.rejectCommandLocked(seat, a.RequestID, "not_playing", ErrNotPlaying.Error())
 		return ErrNotPlaying
 	}
 	err := r.game.Submit(game.Action{Seat: seat, Type: a.Type, Amount: a.Amount})
 	if err != nil {
-		r.sendErrorLocked(seat, "illegal_action", err.Error())
+		r.rejectCommandLocked(seat, a.RequestID, errCode(err, "illegal_action"), err.Error())
 		return err
 	}
+	// 成功命令的 applied 回执随紧随其后的 commit 状态帧下发（带 appliedRevision）。
+	r.queueAppliedReceiptLocked(seat, a.RequestID)
 	return nil
 }
 
@@ -378,32 +537,61 @@ func (r *Room) Reveal(seat int, rp model.RevealPayload) (int, error) {
 	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil {
 		return 0, ErrBadSeat
 	}
+	if rc, ok := r.lookupReceiptLocked(seat, rp.RequestID); ok {
+		r.replayReceiptLocked(seat, rc)
+		return 0, nil
+	}
+	if err := r.validateMetaLocked(rp.CommandMeta); err != nil {
+		r.rejectCommandLocked(seat, rp.RequestID, "stale_state", err.Error())
+		return 0, err
+	}
 	if r.game == nil {
+		r.rejectCommandLocked(seat, rp.RequestID, "not_playing", ErrNotPlaying.Error())
 		return 0, ErrNotPlaying
 	}
 	cost, err := r.game.Reveal(game.RevealReq{Seat: seat, CardID: rp.CardID, Scope: rp.Scope})
 	if err != nil {
-		r.sendErrorLocked(seat, "illegal_reveal", err.Error())
+		r.rejectCommandLocked(seat, rp.RequestID, "illegal_reveal", err.Error())
 		return 0, err
 	}
+	r.queueAppliedReceiptLocked(seat, rp.RequestID)
 	return cost, nil
 }
 
 // Leave 离座：空闲期立即释放；局内先标记，手牌结束后生效（避免座位中途蒸发）。
 func (r *Room) Leave(seat int) error {
+	return r.LeaveWithMeta(seat, model.CommandMeta{})
+}
+
+// LeaveWithMeta 是 v2 离座命令（去重回执 + expected 校验）。
+func (r *Room) LeaveWithMeta(seat int, meta model.CommandMeta) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil {
 		return ErrBadSeat
 	}
+	if rc, ok := r.lookupReceiptLocked(seat, meta.RequestID); ok {
+		r.replayReceiptLocked(seat, rc)
+		return nil
+	}
+	if err := r.validateMetaLocked(meta); err != nil {
+		r.rejectCommandLocked(seat, meta.RequestID, "stale_state", err.Error())
+		return err
+	}
+	r.queueAppliedReceiptLocked(seat, meta.RequestID)
+	r.flushReceiptLocked(seat)
 	if r.status == model.StatusPlaying {
 		r.seats[seat].pendingLeave = true
 		r.seats[seat].link = nil
 		r.tickBotsLocked()
+		r.refreshStateLocked()
 		return nil
 	}
 	r.freeSeatLocked(seat)
 	r.checkDissolveLocked()
+	if !r.closed {
+		r.refreshStateLocked()
+	}
 	return nil
 }
 
@@ -417,12 +605,28 @@ func (r *Room) Snapshot(seat int) model.SnapshotPayload {
 
 // Resync 给某座位补发全量快照（上行 resync / 断线重连修复，A4.3）。
 func (r *Room) Resync(seat int) {
+	r.ResyncWithMeta(seat, "")
+}
+
+// ResyncWithMeta 补发快照 + v2 状态帧；requestId 命中回执缓存时一并重放（核对在途命令）。
+func (r *Room) ResyncWithMeta(seat int, requestID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil {
 		return
 	}
 	r.sendLocked(seat, model.TypeSnapshot, r.snapshotLocked(seat))
+	var receipts []model.CommandReceipt
+	if requestID != "" {
+		if rc, ok := r.lookupReceiptLocked(seat, requestID); ok {
+			receipts = append(receipts, rc)
+		}
+	}
+	if len(receipts) == 0 {
+		receipts = r.pendingReceipts[seat]
+		delete(r.pendingReceipts, seat)
+	}
+	r.sendStateLocked(seat, stateReasonResync, nil, receipts)
 }
 
 // SendError 给某座位回 error 消息（WS 网关层错误：坏信封/未知类型等）。
@@ -579,6 +783,8 @@ func (r *Room) beginHandLocked() {
 	// 0) 换手重置 bot 再加注计数（每手每街独立封顶，见 BotParams.MaxRaises）。
 	clear(r.botRaiseCount)
 	clear(r.botRaisePhase)
+	r.handShowdown = nil
+	r.nextHandAt = nil
 
 	// 1) 空位 bot 补位（A4.4）。
 	for i, o := range r.seats {
@@ -730,6 +936,7 @@ func (r *Room) freeSeatLocked(seat int) {
 		}
 	}
 	r.seats[seat] = nil
+	r.latestValid = false // 事务快照已过期，下一次状态帧从 game 重拍
 }
 
 // checkDissolveLocked 房间回收判定（A4.2 生命周期闭环 + 空闲房回收）：
@@ -806,8 +1013,10 @@ func (r *Room) scheduleNextHandLocked() {
 	}
 	r.stopNextHandTimerLocked()
 	startAt := time.Now().Add(r.timing.NextHandDelay)
+	at := startAt.UnixMilli()
+	r.nextHandAt = &at
 	r.nextHandTimer = time.AfterFunc(r.timing.NextHandDelay, r.onNextHandTick)
-	r.broadcastLocked(model.TypeNextHand, model.NextHandPayload{StartAt: startAt.UnixMilli()})
+	r.broadcastLocked(model.TypeNextHand, model.NextHandPayload{StartAt: at})
 }
 
 // stopNextHandTimerLocked 取消下一手排程（提前开局/关桌时清场）。
@@ -816,6 +1025,7 @@ func (r *Room) stopNextHandTimerLocked() {
 		r.nextHandTimer.Stop()
 		r.nextHandTimer = nil
 	}
+	r.nextHandAt = nil
 }
 
 // onNextHandTick 下一手排程到点：active≥2 且有在座人类即自动开局；
@@ -920,28 +1130,37 @@ func (r *Room) snapshotLocked(seat int) model.SnapshotPayload {
 			}
 			seats[i] = st
 		}
-		return model.SnapshotPayload{
-			RoomCode:   r.code,
-			AutoReveal: r.cfg.AutoReveal,
-			Phase:      model.PhaseWaiting,
-			Seats:      seats,
-			MySeat:     seat,
-			MyCards:    []model.CardData{},
-			Community:  []model.CardData{},
-			TurnSeat:   -1,
-			SmallBlind: r.cfg.SmallBlind,
-			BigBlind:   r.cfg.BigBlind,
-			RevealRate: r.cfg.RevealRate,
-			Reveals:    []model.RevealRecord{},
-			ChatEnabled: r.cfg.ChatEnabled,
-			Seq:        r.seq, // 快照基线 = 最后事件序号（本帧信封 seq = 基线+1）
-			TurnMs:     r.turnTimeoutSeconds * 1000,
-			Seed:       nil, // 未开局无「当前手 seed」
-			Box:        []model.BoxCard{},
-			Pool:       r.poolInfoLocked(),
+		s := model.SnapshotPayload{
+			RoomCode:     r.code,
+			AutoReveal:   r.cfg.AutoReveal,
+			Phase:        model.PhaseWaiting,
+			Seats:        seats,
+			MySeat:       seat,
+			MyCards:      []model.CardData{},
+			Community:    []model.CardData{},
+			TurnSeat:     -1,
+			SmallBlind:   r.cfg.SmallBlind,
+			BigBlind:     r.cfg.BigBlind,
+			RevealRate:   r.cfg.RevealRate,
+			Reveals:      []model.RevealRecord{},
+			ChatEnabled:  r.cfg.ChatEnabled,
+			Seq:          r.seq, // 快照基线 = 最后事件序号（本帧信封 seq = 基线+1）
+			TurnMs:       r.turnTimeoutSeconds * 1000,
+			Seed:         nil, // 未开局无「当前手 seed」
+			Box:          []model.BoxCard{},
+			Pool:         r.poolInfoLocked(),
+			LegalActions: []string{},
 		}
+		r.decorateLocked(seat, &s)
+		return s
 	}
-	raw, err := json.Marshal(r.game.SnapshotFor(seat))
+	return r.toModelSnapshotLocked(seat, r.game.SnapshotFor(seat))
+}
+
+// toModelSnapshotLocked 把 game 视角快照转成线上快照并补齐 room 字段。
+// game 是唯一牌局真源，room 不二次计算筹码/积分。
+func (r *Room) toModelSnapshotLocked(seat int, gs game.Snapshot) model.SnapshotPayload {
+	raw, err := json.Marshal(gs)
 	if err != nil {
 		slog.Error("game 快照序列化失败", "room", r.code, "err", err)
 		return model.SnapshotPayload{RoomCode: r.code, MySeat: seat, TurnSeat: -1}
@@ -951,39 +1170,8 @@ func (r *Room) snapshotLocked(seat int) model.SnapshotPayload {
 		slog.Error("game 快照解析失败", "room", r.code, "err", err)
 		return model.SnapshotPayload{RoomCode: r.code, MySeat: seat, TurnSeat: -1}
 	}
-	s.RoomCode = r.code // game 不知道房间码，room 补
-	s.MySeat = seat
-	s.ChatEnabled = r.cfg.ChatEnabled
-	if r.handSeedCommit != "" { // 本手固证（断线快照恢复后仍可验证，frontend-contract §2）
-		sc := r.handSeedCommit
-		s.SeedCommit = &sc
-	}
-	// 契约扩展字段装配（minRaise/turnMs/box/seats[i].rebuys 从 game 只读访问器取；
-	// seq/seed/box/pool/ready 以 room 为真源）。
 	s.Seq = r.seq // 快照基线 = 信封 seq 的当前值（本帧信封 seq = 基线+1）
-	s.MinRaise = r.game.MinRaise()
-	s.TurnMs = r.game.TurnMs()
-	if r.seedRevealed { // 当前手 seed：摊牌后可见，之前 null
-		seed := strconv.FormatInt(r.handSeed, 10)
-		s.Seed = &seed
-	}
-	box := r.game.Box() // 盒名单只含 L1 公开字段（D7/D17）
-	s.Box = make([]model.BoxCard, 0, len(box))
-	for _, bc := range box {
-		s.Box = append(s.Box, model.BoxCard{
-			ID: bc.ID, Title: bc.Title, Score: bc.Score, Bucket: bc.Bucket, Year: bc.Year,
-		})
-	}
-	s.Pool = r.poolInfoLocked()
-	for i := range s.Seats {
-		if i < len(r.seats) && r.seats[i] != nil {
-			s.Seats[i].Nick = r.seats[i].nick // room 是昵称真源（game 侧同步可能滞后）
-			s.Seats[i].Ready = r.seats[i].ready
-			s.Seats[i].Rebuys = r.game.Rebuys(i)
-		} else {
-			s.Seats[i].Nick = ""
-		}
-	}
+	r.decorateLocked(seat, &s)
 	return s
 }
 
@@ -1024,8 +1212,19 @@ func (r *Room) handleEvent(ev game.Event) {
 		slog.Error("事件序列化失败", "room", r.code, "t", ev.Type, "err", err)
 		return
 	}
+	r.recordGameEventLocked(ev)
 
 	switch ev.Type {
+	case game.EventCommit:
+		// 事务提交：game 在锁内捕获的全座位快照，room 在此有序应用并分配 revision。
+		var cp game.CommitPayload
+		if err := json.Unmarshal(raw, &cp); err == nil {
+			r.applyCommitLocked(&cp)
+		} else {
+			slog.Error("提交快照解析失败", "room", r.code, "err", err)
+		}
+		return
+
 	case model.TypeDealt:
 		// 底牌只发给本人，他人只收占位（§5 dealt）。
 		var dp model.DealtPayload
@@ -1080,6 +1279,14 @@ func (r *Room) handleEvent(ev game.Event) {
 			}
 		}
 
+	case model.TypeShowdown:
+		// 摊牌：冻结本手公开牌型（结算摘要的 showdown 区）。
+		var sp model.ShowdownPayload
+		if err := json.Unmarshal(raw, &sp); err == nil {
+			r.handShowdown = sp.Hands
+		}
+		r.broadcastLocked(model.TypeShowdown, raw)
+
 	case model.TypeSettled:
 		r.broadcastLocked(model.TypeSettled, raw)
 		r.onSettledLocked(raw)
@@ -1098,6 +1305,9 @@ func (r *Room) handleEvent(ev game.Event) {
 // onSettledLocked 收一手：落结果、记账本、回到等待、清离座位。
 func (r *Room) onSettledLocked(raw []byte) {
 	r.flushHandLogLocked() // 攒批动作/揭示账先落库，再收手牌
+	// 结算摘要以处置前（重买/离席前）的座位状态冻结，供结算回顾展示。
+	snap := r.snapshotLocked(0)
+	r.lastResult = r.buildHandResultLocked(raw, snap)
 	// 可验证发牌揭示（frontend-contract §2）：摊牌后揭示 seed，客户端本地算哈希与固证比对。
 	if r.handSeedCommit != "" {
 		r.broadcastLocked(model.TypeSeedReveal, model.SeedRevealPayload{
@@ -1111,8 +1321,7 @@ func (r *Room) onSettledLocked(raw []byte) {
 		}
 	}
 	// 双账本落库（§1.4）：以 game 账面为准，scores 表做持久审计。
-	// chips/points 为全局字段（与视角无关），取一次快照复用，避免逐座全量重算。
-	snap := r.snapshotLocked(0)
+	// chips/points 为全局字段（与视角无关），复用处置前的快照，避免逐座全量重算。
 	for i, o := range r.seats {
 		if o == nil || !o.joined {
 			continue
@@ -1173,10 +1382,50 @@ func (r *Room) onSettledLocked(raw []byte) {
 	if r.closed {
 		return
 	}
+	// 重买/离席/破产处置改变了筹码结构：让随后到达的 settle commit 以当前状态重拍，
+	// 避免把处置前的旧筹码盖回客户端。
+	r.recaptureCommits = 1
 	// 对账帧：座位/筹码结构变化（重买/离席/断线回收/破产处置）后广播全量快照。
 	r.broadcastSnapshotLocked()
 	// 下一手节奏：排程自动开局定时器并广播 nextHand{startAt}（全员 ready 可提前开局）。
 	r.scheduleNextHandLocked()
+}
+
+// buildHandResultLocked 冻结最近一手的结算摘要（昵称/座位/赢家金额/摊牌牌型）。
+func (r *Room) buildHandResultLocked(raw []byte, snap model.SnapshotPayload) *model.HandResult {
+	var sp model.SettledPayload
+	if err := json.Unmarshal(raw, &sp); err != nil {
+		slog.Warn("结算载荷解析失败", "room", r.code, "err", err)
+	}
+	res := &model.HandResult{
+		HandSeq:   r.handSeq,
+		EndedAt:   time.Now().UnixMilli(),
+		EndReason: "fold_win",
+		Seats:     []model.ResultSeat{},
+		Rows:      sp.Rows,
+		PotWins:   sp.PotWins,
+		Showdown:  []model.ShowdownHand{},
+	}
+	if res.Rows == nil {
+		res.Rows = []model.SettleRow{}
+	}
+	if res.PotWins == nil {
+		res.PotWins = map[int]int{}
+	}
+	if len(r.handShowdown) > 0 {
+		res.EndReason = "showdown"
+		res.Showdown = r.handShowdown
+	}
+	for i, o := range r.seats {
+		if o == nil || o.isBot {
+			if o != nil && o.isBot {
+				res.Seats = append(res.Seats, model.ResultSeat{Seat: i, Nick: o.nick, OccupantKind: "bot"})
+			}
+			continue
+		}
+		res.Seats = append(res.Seats, model.ResultSeat{Seat: i, Nick: o.nick, OccupantKind: "human"})
+	}
+	return res
 }
 
 // flushHandLogLocked 把本手攒批的动作/揭示账单事务落库（一手一事务，见 store.AppendHandLog）。

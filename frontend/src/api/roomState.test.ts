@@ -3,7 +3,7 @@
 // nextHand/readied）。
 import { beforeEach, describe, it, expect } from 'vitest'
 import { applyEvent, clearError, createRoomState } from './roomState'
-import type { Envelope, SeatState, SnapshotPayload } from './types'
+import type { Envelope, HandResult, SeatState, SnapshotPayload, StateFrame } from './types'
 
 let nextSeq = 1
 const env = (t: string, p: unknown): Envelope => ({ t, seq: nextSeq++, p })
@@ -206,5 +206,132 @@ describe('roomState 契约增量', () => {
     s = clearError(s)
     expect(s.lastError).toBeNull()
     expect(clearError(s)).toBe(s)
+  })
+})
+
+describe('roomState v2 权威状态帧', () => {
+  const card = (id: number) => ({ id, title: `牌${id}`, score: 80, bucket: 3, year: 2015, monogram: '牌' })
+
+  const handResult = (over: Partial<HandResult> = {}): HandResult => ({
+    handSeq: 3,
+    endedAt: 1700000000000,
+    endReason: 'showdown',
+    seats: [],
+    rows: [{ seat: 0, chipsDelta: 20, points: { handScore: 5, bondBonus: 0, revealCost: 0 } }],
+    potWins: { 0: 20 },
+    showdown: [],
+    ...over,
+  })
+
+  const frame = (over: Partial<StateFrame> = {}): Envelope =>
+    env('state', {
+      protocolVersion: 2,
+      roomCode: 'SAKURA',
+      roomInstanceId: 'inst-1',
+      revision: 1,
+      serverNow: 1000,
+      reason: 'join',
+      state: snap({ myCards: [card(1), card(2)], legalActions: ['fold', 'call'] }),
+      events: [],
+      receipts: [],
+      ...over,
+    })
+
+  it('旧版协议帧不进入 v2，不置 live', () => {
+    const s = applyEvent(createRoomState(), frame({ protocolVersion: 1 }))
+    expect(s.live).toBe(false)
+    expect(s.protocol).toBe(0)
+  })
+
+  it('首帧 revision=0 也落库并置 live；已 live 后同 revision 空帧原样返回', () => {
+    let s = applyEvent(
+      createRoomState(),
+      frame({ revision: 0, state: snap({ myCards: [card(1), card(2)], legalActions: ['fold'] }) }),
+    )
+    expect(s.live).toBe(true)
+    expect(s.revision).toBe(0)
+    expect(s.myCards).toHaveLength(2)
+
+    // 已 live：同 revision 且无回执/事件 → 不重建（原引用）
+    expect(applyEvent(s, frame({ revision: 0, state: snap() }))).toBe(s)
+  })
+
+  it('低 revision 丢弃；相同 revision 只合并回执与事件', () => {
+    let s = applyEvent(createRoomState(), frame({ revision: 2 }))
+    expect(s.live).toBe(true)
+    expect(s.revision).toBe(2)
+    expect(s.myCards).toHaveLength(2)
+
+    s = applyEvent(s, frame({ revision: 1, state: snap() }))
+    expect(s.revision).toBe(2)
+    expect(s.myCards).toHaveLength(2)
+
+    s = applyEvent(
+      s,
+      frame({
+        revision: 2,
+        state: snap(),
+        receipts: [{ requestId: 'r1', status: 'applied', appliedRevision: 2 }],
+      }),
+    )
+    expect(s.revision).toBe(2)
+    expect(s.myCards).toHaveLength(2) // 同 revision 不替换权威数据
+    expect(s.receipts.r1.status).toBe('applied')
+  })
+
+  it('房间实例变化清空旧私牌、聊天与回执', () => {
+    let s = applyEvent(
+      createRoomState(),
+      frame({ revision: 5, receipts: [{ requestId: 'old', status: 'applied' }] }),
+    )
+    s = applyEvent(s, env('said', { seat: 1, text: '你好' }))
+    expect(s.receipts.old).toBeTruthy()
+    expect(s.chat).toHaveLength(1)
+
+    s = applyEvent(s, frame({ revision: 6, roomInstanceId: 'inst-2' }))
+    expect(s.roomInstanceId).toBe('inst-2')
+    expect(s.revision).toBe(6)
+    expect(s.myCards).toHaveLength(2) // 新实例自己的底牌照常采纳
+    expect(s.chat).toHaveLength(0)
+    expect(s.receipts).toEqual({})
+  })
+
+  it('同一手连续结算帧复用 settled/showdown 引用，新一手才变化', () => {
+    const result = handResult()
+    const settledSnap = snap({ phase: 'settled', handSeq: 3, lastResult: result })
+    let s = applyEvent(createRoomState(), frame({ revision: 1, state: settledSnap }))
+    const settled = s.settled
+    const showdown = s.showdown
+    expect(settled).not.toBeNull()
+
+    // 同一手再来一帧（内容等价但对象重建）：引用保持不变，防音效/特效重播
+    s = applyEvent(
+      s,
+      frame({ revision: 2, state: { ...settledSnap, seats: [...settledSnap.seats] } }),
+    )
+    expect(s.settled).toBe(settled)
+    expect(s.showdown).toBe(showdown)
+
+    // 新一手：引用变化
+    s = applyEvent(
+      s,
+      frame({
+        revision: 3,
+        state: snap({ phase: 'settled', handSeq: 4, lastResult: { ...result, handSeq: 4 } }),
+      }),
+    )
+    expect(s.settled).not.toBe(settled)
+  })
+
+  it('lastResult 仅在 showdown/settled 投影为结算态（重连后可恢复）', () => {
+    const result = handResult()
+    const live = applyEvent(createRoomState(), frame({ state: snap({ phase: 'settled', lastResult: result }) }))
+    expect(live.lastResult?.handSeq).toBe(3)
+    expect(live.settled?.potWins).toEqual({ 0: 20 })
+
+    const nextHand = applyEvent(live, frame({ revision: 2, state: snap({ phase: 'preflop', lastResult: result }) }))
+    expect(nextHand.lastResult?.handSeq).toBe(3) // 上手摘要保留给回顾
+    expect(nextHand.settled).toBeNull() // 新一手不残留结算面板
+    expect(nextHand.showdown).toBeNull()
   })
 })
