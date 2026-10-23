@@ -39,6 +39,8 @@ func TestA63ConcurrencySoak(t *testing.T) {
 		cfg := model.RoomConfig{
 			AutoReveal: false, Seats: 4, SmallBlind: 1, BigBlind: 2,
 			Chips: 1000000, RevealRate: 0, DeckStrategy: "stratified", DeckSize: 78,
+			RoomKind: model.RoomKindPractice, BotPolicy: model.BotPolicyFill,
+			TargetHumanCount: 2, NextHandPolicy: model.NextHandManual,
 		}
 		bp := DefaultBotParams()
 		bp.DelayMs = 0
@@ -50,9 +52,7 @@ func TestA63ConcurrencySoak(t *testing.T) {
 		if _, err := r.Join("harness"); err != nil {
 			t.Fatalf("桌%d harness 入座: %v", i, err)
 		}
-		if err := r.Ready(0); err != nil {
-			t.Fatalf("桌%d 首手 ready: %v", i, err)
-		}
+		readyAndStart(t, r, 0)
 		rooms = append(rooms, r)
 	}
 	defer func() {

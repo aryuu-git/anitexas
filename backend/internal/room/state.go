@@ -86,6 +86,19 @@ func (r *Room) refreshStateLocked() {
 	r.emitStateLocked(stateReasonMutation)
 }
 
+// refreshOthersLocked 只把房间级变化发给其他在线座位（新连接自己随后收 join 帧），
+// 不清空待发事件/回执，避免新座位的 dealt 私密事件被提前消费。
+func (r *Room) refreshOthersLocked(exceptSeat int) {
+	r.captureFromGameLocked()
+	r.nextRevisionLocked()
+	for i := range r.seats {
+		if i == exceptSeat || r.seats[i] == nil || r.seats[i].link == nil {
+			continue
+		}
+		r.sendStateLocked(i, stateReasonMutation, nil, nil)
+	}
+}
+
 // emitStateLocked 把当前 revision 的状态帧发给全部在线座位，并清空待发事件与回执。
 func (r *Room) emitStateLocked(reason string) {
 	for i := range r.seats {
@@ -206,17 +219,22 @@ func (r *Room) decorateLocked(seat int, s *model.SnapshotPayload) {
 	s.Revision = r.revision
 	s.RoomStatus = r.status
 	s.NextHandAt = r.nextHandAt
-	if r.timing.NextHandDelay > 0 {
-		s.NextHandPolicy = "automatic"
-	} else {
-		s.NextHandPolicy = "manual"
-	}
+	s.NextHandPolicy = r.cfg.NextHandPolicy
 	s.Readiness = r.readinessLocked()
 	s.ViewerStatus = "seated"
 	s.RemovalReason = nil
 	s.Participation = r.participationLocked(seat)
 	s.LastResult = r.lastResult
 	s.RecentEvents = r.recentEventsCopyLocked()
+	humans, bots := r.humanBotCountsLocked()
+	s.RoomKind = r.cfg.RoomKind
+	s.BotPolicy = r.cfg.BotPolicy
+	s.TargetHumanCount = r.cfg.TargetHumanCount
+	s.HostSeat = r.hostSeat
+	s.IsHost = r.isHostLocked(seat)
+	s.HumanCount = humans
+	s.BotCount = bots
+	s.CanStart, s.StartBlockedReason = r.startStatusLocked()
 	if s.LegalActions == nil {
 		s.LegalActions = []string{}
 	}

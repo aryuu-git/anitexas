@@ -247,6 +247,17 @@ export interface SnapshotPayload {
   lastResult?: HandResult | null
   /** 按视角过滤的有限过程历史 */
   recentEvents?: ExperienceEvent[]
+
+  /** ===== 第二轮房间策略（服务端派生）===== */
+  roomKind?: RoomKind
+  botPolicy?: BotPolicy
+  targetHumanCount?: number
+  hostSeat?: number
+  isHost?: boolean
+  canStart?: boolean
+  startBlockedReason?: string
+  humanCount?: number
+  botCount?: number
 }
 
 /** ===== v2 状态帧与命令确认 ===== */
@@ -257,6 +268,8 @@ export type RemovalReason = 'left' | 'rebuy_limit' | 'expired'
 export type Participation = 'in_hand' | 'waiting_next_hand' | 'not_started'
 export type StateReason = 'join' | 'resync' | 'mutation'
 export type NextHandPolicy = 'manual' | 'automatic'
+export type RoomKind = 'friend' | 'practice'
+export type BotPolicy = 'off' | 'fill'
 
 /** 开局准备度（排除 bot/空座/明确离席者） */
 export interface Readiness {
@@ -479,6 +492,12 @@ export type ClientMessage =
       }
     }
   | { t: 'ready'; p: CommandMeta }
+  | { t: 'cancelReady'; p: CommandMeta }
+  | { t: 'start'; p: { targetHumanCount?: number } & CommandMeta }
+  | { t: 'addBot'; p: { seat?: number } & CommandMeta }
+  | { t: 'removeBot'; p: { seat: number } & CommandMeta }
+  | { t: 'setTarget'; p: { targetHumanCount: number } & CommandMeta }
+  | { t: 'nextHandPolicy'; p: { policy: NextHandPolicy } & CommandMeta }
   | { t: 'action'; p: { type: ActionType; amount?: number } & CommandMeta }
   | { t: 'reveal'; p: { cardId: number; scope: RevealScope } & CommandMeta }
   /** 快捷表情（服务端 10 秒/座位冷却，超限回 error{code:"emote_failed"}） */

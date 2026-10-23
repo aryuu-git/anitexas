@@ -11,9 +11,9 @@ export interface PhaseProgressProps {
 }
 
 const STATUS_TEXT: Record<PhaseStep['status'], string | null> = {
-  done: '已完成',
+  done: null,
   current: '进行中',
-  pending: '未开始',
+  pending: null,
   skipped: '跳过',
 }
 

@@ -1,5 +1,5 @@
 import { memo, useCallback, useState } from 'react'
-import type { CardData, RevealScope, ShowdownHand } from '../api/types'
+import { TIER_NAMES, type CardData, type RevealScope, type ShowdownHand } from '../api/types'
 import { CardFace } from './CardFace'
 import { RevealConfirm } from './RevealConfirm'
 import { Button } from './ui/Button'
@@ -45,7 +45,7 @@ export const HoleCards = memo(function HoleCards({
   const canLiang = !autoReveal && canReveal && !myShowdownHand && myCards.some((c) => !c.elements)
 
   return (
-    <div className="flex flex-col items-center gap-2">
+    <div className="flex flex-col items-center gap-2" data-testid="hole-cards">
       <div className="flex flex-wrap items-center justify-center gap-x-3">
         <span className="font-serif text-body text-gold-light">我的底牌</span>
         {canLiang && (
@@ -61,6 +61,26 @@ export const HoleCards = memo(function HoleCards({
             亮一只
           </Button>
         )}
+        {!autoReveal && !myShowdownHand && (
+          <span className="text-micro text-muted">点击牌面查看要素</span>
+        )}
+        <details className="relative">
+          <summary className="cursor-pointer rounded-chip border border-gold/20 px-2 py-0.5 text-micro text-muted">
+            牌型
+          </summary>
+          <div className="absolute right-0 top-full z-30 mt-2 w-56 rounded-tile border border-gold/20 bg-ink-deep p-3 shadow-lift">
+            <div className="mb-2 text-micro text-gold-foil">牌型大小</div>
+            <ol className="grid grid-cols-2 gap-1 text-micro text-gold-light/85">
+              {Object.entries(TIER_NAMES)
+                .sort((a, b) => Number(a[0]) - Number(b[0]))
+                .map(([tier, name]) => (
+                  <li key={tier}>
+                    {tier}. {name}
+                  </li>
+                ))}
+            </ol>
+          </div>
+        </details>
       </div>
       <div className="flex justify-center gap-3">
         {myCards.map((card) => {
@@ -69,7 +89,7 @@ export const HoleCards = memo(function HoleCards({
             <CardFace
               key={card.id}
               card={card}
-              size="lg"
+              size="sm"
               className="animate-deal-in"
               state={showdown ? 'showdown' : autoReveal || card.elements ? 'revealed' : 'hidden'}
               grouped={showdown?.grouped ?? false}

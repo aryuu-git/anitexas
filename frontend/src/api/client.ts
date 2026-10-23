@@ -7,7 +7,7 @@
  *   GET  /api/health             健康检查 → {status:"ok"}
  * 全部 JSON；错误统一回 {code,msg}。
  */
-import type { Phase, ThemeFilter } from './types'
+import type { BotPolicy, NextHandPolicy, Phase, RoomKind, ThemeFilter } from './types'
 
 /** 建房配置（可选项与后端 room.config JSON 对齐） */
 export interface CreateRoomRequest {
@@ -29,6 +29,14 @@ export interface CreateRoomRequest {
   themeFilter?: ThemeFilter
   /** 房主是否开放聊天（默认 true） */
   chatEnabled?: boolean
+  /** 房间类型：朋友房（默认）/ 练习房 */
+  roomKind?: RoomKind
+  /** 机器人策略：朋友房 off（默认）/ 练习房 fill */
+  botPolicy?: BotPolicy
+  /** 期望参局人数（2..seats）；不足时房主须明确调整或添加机器人 */
+  targetHumanCount?: number
+  /** 下一手策略：朋友房 manual（默认）/ 练习房可 automatic */
+  nextHandPolicy?: NextHandPolicy
 }
 
 /** 房间概要（列表/建房/预览回执同构） */
@@ -50,6 +58,11 @@ export interface RoomSummary {
   humanCount?: number
   botCount?: number
   joinable?: boolean
+  roomKind?: RoomKind
+  botPolicy?: BotPolicy
+  targetHumanCount?: number
+  nextHandPolicy?: NextHandPolicy
+  hostSeat?: number
 }
 
 /** 入座回执：ticket 一次性；resumeToken 用于刷新/重连恢复身份 */

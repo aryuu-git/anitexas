@@ -20,6 +20,11 @@ let events: Envelope[] = []
 const collect = (e: Envelope) => events.push(e)
 const snaps = () => events.filter((e) => e.t === 'snapshot').map((e) => e.p as SnapshotPayload)
 const lastSnap = () => snaps()[snaps().length - 1]
+/** 准备 + 房主显式开始（mock 与真实服务端同策略：ready 不自动发牌）。 */
+const readyAndStart = (desk: ReturnType<typeof startMockDesk>) => {
+  desk.send({ t: 'ready', p: {} })
+  desk.send({ t: 'start', p: {} })
+}
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -76,10 +81,10 @@ describe('mockDesk 契约增量', () => {
 })
 
 describe('mockDesk 对局流程', () => {
-  it('ready 开局：handSeq=1、轮庄盲注、发牌单一下发、行动权在大盲后', async () => {
+  it('房主开始：handSeq=1、轮庄盲注、发牌单一下发、行动权在大盲后', async () => {
     const desk = startMockDesk(OPTS, collect)
     await vi.advanceTimersByTimeAsync(300)
-    desk.send({ t: 'ready', p: {} })
+    readyAndStart(desk)
     await vi.advanceTimersByTimeAsync(500)
     desk.close()
     const snap = lastSnap()
@@ -100,9 +105,9 @@ describe('mockDesk 对局流程', () => {
   })
 
   it('全下推演到摊牌结算：bot 跟全下、破产重买对账、nextHand 排程', async () => {
-    const desk = startMockDesk(OPTS, collect)
+    const desk = startMockDesk({ ...OPTS, nextHandPolicy: 'automatic' }, collect)
     await vi.advanceTimersByTimeAsync(300)
-    desk.send({ t: 'ready', p: {} })
+    readyAndStart(desk)
     await vi.advanceTimersByTimeAsync(900) // bot 3 跟注，轮到自己
     desk.send({ t: 'action', p: { type: 'allin' } })
     await vi.advanceTimersByTimeAsync(12000)
@@ -125,27 +130,30 @@ describe('mockDesk 对局流程', () => {
     expect(nextHand.startAt).toBeGreaterThan(Date.now())
   })
 
-  it('settled 后全员 ready 提前开局（不等自动开局）', async () => {
+  it('手动策略下 ready 不自动开下一手，房主 start 才发牌', async () => {
     const desk = startMockDesk(OPTS, collect)
     await vi.advanceTimersByTimeAsync(300)
-    desk.send({ t: 'ready', p: {} })
+    readyAndStart(desk)
     await vi.advanceTimersByTimeAsync(900)
     desk.send({ t: 'action', p: { type: 'allin' } })
     await vi.advanceTimersByTimeAsync(12000)
     expect(lastSnap().phase).toBe('settled')
+    expect(events.some((e) => e.t === 'nextHand')).toBe(false)
+
     desk.send({ t: 'ready', p: {} })
-    await vi.advanceTimersByTimeAsync(800) // bot 200/400/600 陆续 ready，700 全员到齐即开
+    await vi.advanceTimersByTimeAsync(9000)
+    expect(lastSnap().handSeq).toBe(1) // ready 不会偷偷发牌
+
+    desk.send({ t: 'start', p: {} })
+    await vi.advanceTimersByTimeAsync(600)
     desk.close()
     expect(lastSnap().handSeq).toBe(2)
-    expect(events.filter((e) => e.t === 'readied').map((e) => (e.p as ReadiedPayload).seat)).toEqual(
-      expect.arrayContaining([0, 1, 2, 3]),
-    )
   })
 
   it('非法动作回 error（不吞不崩）', async () => {
     const desk = startMockDesk(OPTS, collect)
     await vi.advanceTimersByTimeAsync(300)
-    desk.send({ t: 'ready', p: {} })
+    readyAndStart(desk)
     await vi.advanceTimersByTimeAsync(900)
     // 轮到自己时最小目标 = currentBet(2) + minRaise(2) = 4，给 3 非法
     desk.send({ t: 'action', p: { type: 'raise', amount: 3 } })

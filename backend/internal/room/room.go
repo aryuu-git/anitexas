@@ -80,6 +80,12 @@ type Summary struct {
 	HumanCount int    `json:"humanCount"`
 	BotCount   int    `json:"botCount"`
 	Joinable   bool   `json:"joinable"`
+	// ===== 第二轮房间策略 =====
+	RoomKind         string `json:"roomKind"`
+	BotPolicy        string `json:"botPolicy"`
+	TargetHumanCount int    `json:"targetHumanCount"`
+	NextHandPolicy   string `json:"nextHandPolicy"`
+	HostSeat         int    `json:"hostSeat"`
 }
 
 // preppedDeck 是预生成好的一手牌盒 + 其种子（种子用于可验证发牌固证，frontend-contract §2）。
@@ -159,6 +165,9 @@ type Room struct {
 	// 小写固证（frontend-contract §2）。新一手重置。
 	handSeed       int64
 	handSeedCommit string
+	// 本手节奏指标（只记时长与公开动作数，不含牌面/私密信息）。
+	handStartedAt time.Time
+	handActCount  int
 
 	// 本手攒批的动作/揭示账（一手一事务批量提交，见 store.AppendHandLog）。
 	pendingActions []model.ActionRecord
@@ -178,9 +187,14 @@ type Room struct {
 	botRaiseCount map[int]int
 	botRaisePhase map[int]string
 
+	// 房主身份由服务端座位绑定（不是昵称比较，也不靠按钮隐藏）。
+	hostParticipantID string
+	hostSeat          int
+
 	// 节奏参数（Timing 注入；零值 = 机制关闭，见 Timing 注释）。
 	timing        Timing
 	nextHandTimer *time.Timer // 下一手自动开局定时器
+	nextHandGen   int         // 下一手定时器代际：策略切换/取消后旧回调失效
 	reapTimer     *time.Timer // 断线/空闲巡检定时器（自续排程）
 	emptySince    time.Time   // 无在座人类的起算时刻（空闲房回收 TTL 起点）
 	poolFallback  bool        // 主题过滤过窄已回退全库（PoolInfo.fallback 真源）
@@ -212,6 +226,7 @@ type Room struct {
 // （下一手排程/断线回收/空闲房回收/重买上限，零值 = 机制关闭）。
 func NewRoom(id, code, host string, cfg model.RoomConfig, turnTimeoutSeconds int, bot BotParams,
 	library []engine.Card, st *store.Store, onDissolve func(*Room), timing Timing) *Room {
+	cfg = model.NormalizeRoomConfig(cfg)
 	r := &Room{
 		id:                 id,
 		code:               code,
@@ -230,8 +245,15 @@ func NewRoom(id, code, host string, cfg model.RoomConfig, turnTimeoutSeconds int
 		receipts:           make(map[int]map[string]model.CommandReceipt),
 		pendingReceipts:    make(map[int][]model.CommandReceipt),
 		timing:             timing,
+		hostSeat:           -1,
 		stopCh:             make(chan struct{}),
 		onDissolve:         onDissolve,
+	}
+	// 练习房在创建时就补齐机器人（创建前摘要可见）；朋友房绝不自动补位。
+	if cfg.RoomKind == model.RoomKindPractice && cfg.BotPolicy == model.BotPolicyFill {
+		for i := range r.seats {
+			r.seats[i] = &occupant{nick: BotNick(i), isBot: true, ready: true}
+		}
 	}
 	r.deckLib = r.computeDeckLib()
 	r.scheduleReapLocked() // 巡检（断线回收/空闲房回收）自续排程，Close 时停
@@ -310,7 +332,11 @@ func (r *Room) Summary() Summary {
 		SmallBlind: r.cfg.SmallBlind, BigBlind: r.cfg.BigBlind,
 		Seats: r.cfg.Seats, Players: players, Status: r.status,
 		Phase: phase, HandSeq: r.handSeq, HumanCount: humans, BotCount: bots,
-		Joinable: r.status != model.StatusClosed,
+		// 满座时预览直接标不可加入，避免用户点进加入后才收到 room_full。
+		Joinable: r.status != model.StatusClosed && players < r.cfg.Seats,
+		RoomKind: r.cfg.RoomKind, BotPolicy: r.cfg.BotPolicy,
+		TargetHumanCount: r.cfg.TargetHumanCount, NextHandPolicy: r.cfg.NextHandPolicy,
+		HostSeat: r.hostSeat,
 	}
 }
 
@@ -343,6 +369,7 @@ func (r *Room) joinLocked(nick, resumeToken, requestID, roomInstance string, str
 				if requestID != "" {
 					o.joinRequestID = requestID
 				}
+				r.updateHostLocked()
 				return i, o.participantID, o.resumeToken, nil
 			}
 		}
@@ -374,6 +401,7 @@ func (r *Room) joinLocked(nick, resumeToken, requestID, roomInstance string, str
 		if o == nil {
 			pid, token := newIdentity()
 			r.seats[i] = &occupant{nick: nick, participantID: pid, resumeToken: token, joinRequestID: requestID}
+			r.updateHostLocked()
 			return i, pid, token, nil
 		}
 	}
@@ -393,6 +421,7 @@ func (r *Room) joinLocked(nick, resumeToken, requestID, roomInstance string, str
 					slog.Warn("替换 bot 后改绑 game 失败", "room", r.code, "seat", i, "err", err)
 				}
 			}
+			r.updateHostLocked()
 			return i, pid, token, nil
 		}
 	}
@@ -402,6 +431,97 @@ func (r *Room) joinLocked(nick, resumeToken, requestID, roomInstance string, str
 // newIdentity 生成房间实例内的玩家标识与恢复凭据。
 func newIdentity() (participantID, resumeToken string) {
 	return "p_" + uuid.NewString(), "r_" + uuid.NewString()
+}
+
+// updateHostLocked 维护房主座位绑定：房主座位失效时转交给仍在座的最早真人；
+// 没有真人则标记为无房主（等待阶段由 checkDissolve 收桌，局内不会因此开局）。
+func (r *Room) updateHostLocked() {
+	r.hostSeat = -1
+	if r.hostParticipantID != "" {
+		for i, o := range r.seats {
+			if o != nil && !o.isBot && o.participantID == r.hostParticipantID {
+				r.host = o.nick
+				r.hostSeat = i
+				return
+			}
+		}
+		r.hostParticipantID = ""
+	}
+	for i, o := range r.seats {
+		if o == nil || o.isBot || o.participantID == "" {
+			continue
+		}
+		r.hostParticipantID = o.participantID
+		r.host = o.nick
+		r.hostSeat = i
+		return
+	}
+}
+
+// isHostLocked 判断座位是否为服务端确认的房主。
+func (r *Room) isHostLocked(seat int) bool {
+	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil || r.seats[seat].isBot {
+		return false
+	}
+	return r.hostParticipantID != "" && r.seats[seat].participantID == r.hostParticipantID
+}
+
+// humanBotCountsLocked 统计真人/机器人数量（机器人不是朋友人数）。
+func (r *Room) humanBotCountsLocked() (humans, bots int) {
+	for _, o := range r.seats {
+		if o == nil {
+			continue
+		}
+		if o.isBot {
+			bots++
+		} else {
+			humans++
+		}
+	}
+	return humans, bots
+}
+
+// startStatusLocked 派生“房主现在能否开始”和唯一阻塞原因（服务端真源）。
+func (r *Room) startStatusLocked() (bool, string) {
+	if r.status != model.StatusWaiting {
+		return false, "本手正在进行"
+	}
+	if r.hostParticipantID == "" || r.hostSeat < 0 {
+		return false, "房主尚未入座"
+	}
+	humans, bots := r.humanBotCountsLocked()
+	// 有其他真人时，房主断线必须暂停开局；单人练习房不受此限（房主回来即可开）。
+	if r.seats[r.hostSeat].link == nil && humans > 1 {
+		return false, "房主连接断开，重连后可开始"
+	}
+	if r.cfg.RoomKind == model.RoomKindPractice {
+		if humans+bots < 2 {
+			return false, "至少需要 2 位参局者"
+		}
+	} else if humans < 2 {
+		return false, "至少需要 2 位真人，可邀请朋友或明确添加机器人"
+	}
+	// 先报“具体谁没准备好/掉线”，再报人数目标缺口：取消准备必须能立刻被房主看见。
+	for i, o := range r.seats {
+		if o == nil || o.isBot || o.pendingLeave {
+			continue
+		}
+		if !o.ready {
+			return false, fmt.Sprintf("等待 %s 准备", o.nick)
+		}
+		// 房主连接已在上面单独判定（多人房断线必须暂停）；单人练习房允许无链路观测。
+		if o.link == nil && i != r.hostSeat {
+			return false, fmt.Sprintf("等待 %s 重连", o.nick)
+		}
+	}
+	need := r.cfg.TargetHumanCount
+	if need < 2 {
+		need = 2
+	}
+	if humans+bots < need {
+		return false, fmt.Sprintf("还差 %d 位参局者（当前 %d/%d 人）", need-humans-bots, humans+bots, need)
+	}
+	return true, ""
 }
 
 // Attach 挂接 WS 连接并直发全量快照（join 握手成功后；断线重连同样走这里恢复，A4.3）。
@@ -415,6 +535,9 @@ func (r *Room) Attach(seat int, link Link) error {
 	r.seats[seat].link = link
 	r.seats[seat].pendingLeave = false
 	r.seats[seat].detachedAt = time.Time{} // 重连成功，断线计时清零
+	r.updateHostLocked()
+	// 新连接落座后必须让已在座客户端看到人数/连接变化（REST join 本身不广播）。
+	r.refreshOthersLocked(seat)
 	r.sendLocked(seat, model.TypeSnapshot, r.snapshotLocked(seat))
 	var receipts []model.CommandReceipt
 	if len(r.pendingReceipts[seat]) > 0 {
@@ -449,14 +572,17 @@ func (r *Room) detachLink(seat int, link Link) {
 	r.seats[seat].link = nil
 	r.seats[seat].detachedAt = time.Now()
 	r.tickBotsLocked()
+	if !r.closed {
+		r.refreshStateLocked() // canStart 可能因房主/队友断线变化
+	}
 }
 
-// Ready 准备开局：全员人类准备即开（bot 自动补位，A3.5/A4.4）。每手消耗一次准备。
+// Ready 准备：只表达“我已准备好”，绝不触发开局。朋友房开局只能由房主 start。
 func (r *Room) Ready(seat int) error {
 	return r.ReadyWithMeta(seat, model.CommandMeta{})
 }
 
-// ReadyWithMeta 是 v2 准备命令：去重回执 + expected 校验；无开局时也下发新状态帧。
+// ReadyWithMeta 是 v2 准备命令：去重回执 + expected 校验；状态变化广播新帧。
 func (r *Room) ReadyWithMeta(seat int, meta model.CommandMeta) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -472,22 +598,251 @@ func (r *Room) ReadyWithMeta(seat int, meta model.CommandMeta) error {
 		return err
 	}
 	if r.status != model.StatusWaiting {
-		// 局中准备 = 预约下一手（v1 简化为忽略），仍回 applied 让客户端停止 pending。
-		r.queueAppliedReceiptLocked(seat, meta.RequestID)
-		r.flushReceiptLocked(seat)
-		return nil
+		r.rejectCommandLocked(seat, meta.RequestID, "not_waiting", "本手进行中，结束时可准备下一手")
+		return ErrNotPlaying
 	}
 	r.seats[seat].ready = true
 	r.queueAppliedReceiptLocked(seat, meta.RequestID)
-	r.broadcastLocked(model.TypeReadied, model.ReadiedPayload{Seat: seat}) // 准备标记广播（每手重置）
-	before := r.status
-	r.maybeStartLocked()
-	if r.status == before {
-		// 未开局（还有人没准备）：准备状态本身需要新的权威帧。
-		r.refreshStateLocked()
+	r.broadcastLocked(model.TypeReadied, model.ReadiedPayload{Seat: seat})
+	r.refreshStateLocked()
+	return nil
+}
+
+// CancelReadyWithMeta 取消准备（服务端确认后才生效；房主 start 会看到原因）。
+func (r *Room) CancelReadyWithMeta(seat int, meta model.CommandMeta) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil || r.seats[seat].isBot {
+		return ErrBadSeat
+	}
+	if rc, ok := r.lookupReceiptLocked(seat, meta.RequestID); ok {
+		r.replayReceiptLocked(seat, rc)
+		return nil
+	}
+	if err := r.validateMetaLocked(meta); err != nil {
+		r.rejectCommandLocked(seat, meta.RequestID, "stale_state", err.Error())
+		return err
+	}
+	if r.status != model.StatusWaiting {
+		r.rejectCommandLocked(seat, meta.RequestID, "not_waiting", "本手进行中，不能取消准备")
+		return ErrNotPlaying
+	}
+	r.seats[seat].ready = false
+	r.queueAppliedReceiptLocked(seat, meta.RequestID)
+	r.refreshStateLocked()
+	return nil
+}
+
+// StartGame 是唯一开局入口：仅房主、仅等待阶段、全部条件原子校验；同 requestId 幂等。
+func (r *Room) StartGame(seat int, p model.StartPayload) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil || r.seats[seat].isBot {
+		return ErrBadSeat
+	}
+	if rc, ok := r.lookupReceiptLocked(seat, p.RequestID); ok {
+		r.replayReceiptLocked(seat, rc)
+		return nil
+	}
+	if err := r.validateMetaLocked(p.CommandMeta); err != nil {
+		r.rejectCommandLocked(seat, p.RequestID, "stale_state", err.Error())
+		return err
+	}
+	if !r.isHostLocked(seat) {
+		r.rejectCommandLocked(seat, p.RequestID, "not_host", "只有房主可以开始游戏")
+		return errNotHost
+	}
+	if p.TargetHumanCount != nil {
+		if err := r.setTargetLocked(*p.TargetHumanCount); err != nil {
+			r.rejectCommandLocked(seat, p.RequestID, "bad_target", err.Error())
+			return err
+		}
+	}
+	if ok, reason := r.startStatusLocked(); !ok {
+		r.rejectCommandLocked(seat, p.RequestID, "cannot_start", reason)
+		return fmt.Errorf("cannot_start: %s", reason)
+	}
+	r.queueAppliedReceiptLocked(seat, p.RequestID)
+	if err := r.beginHandLocked(); err != nil {
+		delete(r.pendingReceipts, seat)
+		r.rejectCommandLocked(seat, p.RequestID, errCode(err, "start_failed"), err.Error())
+		return err
 	}
 	return nil
 }
+
+// SetTarget 明确调整期望参局人数（朋友房“以当前人数开始”的显式前置操作）。
+func (r *Room) SetTarget(seat int, p model.SetTargetPayload) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil || r.seats[seat].isBot {
+		return ErrBadSeat
+	}
+	if rc, ok := r.lookupReceiptLocked(seat, p.RequestID); ok {
+		r.replayReceiptLocked(seat, rc)
+		return nil
+	}
+	if err := r.validateMetaLocked(p.CommandMeta); err != nil {
+		r.rejectCommandLocked(seat, p.RequestID, "stale_state", err.Error())
+		return err
+	}
+	if !r.isHostLocked(seat) {
+		r.rejectCommandLocked(seat, p.RequestID, "not_host", "只有房主可以调整人数")
+		return errNotHost
+	}
+	if err := r.setTargetLocked(p.TargetHumanCount); err != nil {
+		r.rejectCommandLocked(seat, p.RequestID, "bad_target", err.Error())
+		return err
+	}
+	r.queueAppliedReceiptLocked(seat, p.RequestID)
+	r.refreshStateLocked()
+	return nil
+}
+
+func (r *Room) setTargetLocked(n int) error {
+	if n < 2 || n > r.cfg.Seats {
+		return fmt.Errorf("目标人数需在 2–%d 之间", r.cfg.Seats)
+	}
+	if r.cfg.TargetHumanCount == n {
+		return nil
+	}
+	r.cfg.TargetHumanCount = n
+	// 目标人数变化会改变开局条件：让在场真人重新确认准备，避免用旧 ready 直接开局。
+	for _, o := range r.seats {
+		if o != nil && !o.isBot {
+			o.ready = false
+		}
+	}
+	return nil
+}
+
+// AddBot 房主显式添加机器人（朋友房空座绝不自动补位）。
+func (r *Room) AddBot(seat int, p model.AddBotPayload) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil || r.seats[seat].isBot {
+		return ErrBadSeat
+	}
+	if rc, ok := r.lookupReceiptLocked(seat, p.RequestID); ok {
+		r.replayReceiptLocked(seat, rc)
+		return nil
+	}
+	if err := r.validateMetaLocked(p.CommandMeta); err != nil {
+		r.rejectCommandLocked(seat, p.RequestID, "stale_state", err.Error())
+		return err
+	}
+	if !r.isHostLocked(seat) {
+		r.rejectCommandLocked(seat, p.RequestID, "not_host", "只有房主可以添加机器人")
+		return errNotHost
+	}
+	if r.status != model.StatusWaiting {
+		r.rejectCommandLocked(seat, p.RequestID, "not_waiting", "本手进行中，不能添加机器人")
+		return ErrNotPlaying
+	}
+	target := -1
+	if p.Seat != nil {
+		if *p.Seat < 0 || *p.Seat >= len(r.seats) || r.seats[*p.Seat] != nil {
+			r.rejectCommandLocked(seat, p.RequestID, "bad_seat", "该座位不可添加机器人")
+			return ErrBadSeat
+		}
+		target = *p.Seat
+	} else {
+		for i, o := range r.seats {
+			if o == nil {
+				target = i
+				break
+			}
+		}
+	}
+	if target < 0 {
+		r.rejectCommandLocked(seat, p.RequestID, "room_full", ErrRoomFull.Error())
+		return ErrRoomFull
+	}
+	r.seats[target] = &occupant{nick: BotNick(target), isBot: true, ready: true}
+	r.queueAppliedReceiptLocked(seat, p.RequestID)
+	r.refreshStateLocked()
+	return nil
+}
+
+// RemoveBot 房主移除等待阶段机器人：留下空座等待朋友，不自动补回。
+func (r *Room) RemoveBot(seat int, p model.RemoveBotPayload) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil || r.seats[seat].isBot {
+		return ErrBadSeat
+	}
+	if rc, ok := r.lookupReceiptLocked(seat, p.RequestID); ok {
+		r.replayReceiptLocked(seat, rc)
+		return nil
+	}
+	if err := r.validateMetaLocked(p.CommandMeta); err != nil {
+		r.rejectCommandLocked(seat, p.RequestID, "stale_state", err.Error())
+		return err
+	}
+	if !r.isHostLocked(seat) {
+		r.rejectCommandLocked(seat, p.RequestID, "not_host", "只有房主可以移除机器人")
+		return errNotHost
+	}
+	if r.status != model.StatusWaiting {
+		r.rejectCommandLocked(seat, p.RequestID, "not_waiting", "本手进行中，不能移除机器人")
+		return ErrNotPlaying
+	}
+	if p.Seat < 0 || p.Seat >= len(r.seats) || r.seats[p.Seat] == nil || !r.seats[p.Seat].isBot {
+		r.rejectCommandLocked(seat, p.RequestID, "bad_seat", "该座位不是机器人")
+		return ErrBadSeat
+	}
+	r.freeSeatLocked(p.Seat)
+	r.queueAppliedReceiptLocked(seat, p.RequestID)
+	r.refreshStateLocked()
+	return nil
+}
+
+// SetNextHandPolicy 练习房房主切换手动/自动续局；自动排程仅由服务端建立/取消。
+func (r *Room) SetNextHandPolicy(seat int, p model.NextPolicyPayload) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if seat < 0 || seat >= len(r.seats) || r.seats[seat] == nil || r.seats[seat].isBot {
+		return ErrBadSeat
+	}
+	if rc, ok := r.lookupReceiptLocked(seat, p.RequestID); ok {
+		r.replayReceiptLocked(seat, rc)
+		return nil
+	}
+	if err := r.validateMetaLocked(p.CommandMeta); err != nil {
+		r.rejectCommandLocked(seat, p.RequestID, "stale_state", err.Error())
+		return err
+	}
+	if !r.isHostLocked(seat) {
+		r.rejectCommandLocked(seat, p.RequestID, "not_host", "只有房主可以调整续局方式")
+		return errNotHost
+	}
+	if r.cfg.RoomKind != model.RoomKindPractice {
+		r.rejectCommandLocked(seat, p.RequestID, "not_practice", "朋友房固定手动开始下一手")
+		return errNotPractice
+	}
+	switch p.Policy {
+	case model.NextHandManual:
+		r.cfg.NextHandPolicy = model.NextHandManual
+		r.stopNextHandTimerLocked()
+		r.broadcastLocked(model.TypeNextHand, model.NextHandPayload{StartAt: 0})
+	case model.NextHandAutomatic:
+		r.cfg.NextHandPolicy = model.NextHandAutomatic
+		if r.status == model.StatusWaiting && r.handSeq > 0 {
+			r.scheduleNextHandLocked()
+		}
+	default:
+		r.rejectCommandLocked(seat, p.RequestID, "bad_policy", "续局方式非法")
+		return fmt.Errorf("bad_policy: %s", p.Policy)
+	}
+	r.queueAppliedReceiptLocked(seat, p.RequestID)
+	r.refreshStateLocked()
+	return nil
+}
+
+var (
+	errNotHost     = fmt.Errorf("not_host: 只有房主可以执行该操作")
+	errNotPractice = fmt.Errorf("not_practice: 该房间不支持此设置")
+)
 
 // flushReceiptLocked 立即把某座位的待发回执随一帧状态发出（不改变 revision）。
 func (r *Room) flushReceiptLocked(seat int) {
@@ -753,57 +1108,29 @@ func (r *Room) broadcastErrorLocked(code, msg string) {
 	r.broadcastLocked(model.TypeError, model.ErrorPayload{Code: code, Msg: msg})
 }
 
-// maybeStartLocked 判断提前开局条件（≥1 人类且全部人类已准备）并开第一/下一局：
-// 全员 ready 可在 nextHand 排程到点前提前开局（局中 ready 仍忽略，见 Ready）；
-// 开局失败不死桌（beginHandLocked 自回滚并广播 error，可重新 ready 开局）。
-func (r *Room) maybeStartLocked() {
-	if r.status != model.StatusWaiting {
-		return
-	}
-	humans, ready := 0, 0
-	for _, o := range r.seats {
-		if o != nil && !o.isBot {
-			humans++
-			if o.ready {
-				ready++
-			}
-		}
-	}
-	if humans == 0 || ready < humans {
-		return
-	}
-	r.stopNextHandTimerLocked() // 提前开局，取消下一手自动排程
-	r.beginHandLocked()
-}
-
-// beginHandLocked 开一手牌：补 bot -> 绑定 game 座位 -> 换新牌池 -> 落手牌行 -> Start。
-// 死桌防护：装盒/落 hands/Start 任一步失败即回滚半成品并广播 error（bad_state/deck_exhausted 等），
-// 状态保持 waiting、绝不滞留 playing，可重新 ready 开局（game.Start 失败不推进状态机，可重试）。
-func (r *Room) beginHandLocked() {
+// beginHandLocked 开一手牌：绑定 game 座位 -> 换新牌池 -> 落手牌行 -> Start。
+// 绝不补机器人：机器人只能由练习房创建策略或房主显式 addBot 加入。
+// 任一步失败即回滚半成品，状态保持 waiting，可重新由房主 start。
+func (r *Room) beginHandLocked() error {
 	// 0) 换手重置 bot 再加注计数（每手每街独立封顶，见 BotParams.MaxRaises）。
 	clear(r.botRaiseCount)
 	clear(r.botRaisePhase)
 	r.handShowdown = nil
-	r.nextHandAt = nil
+	r.handStartedAt = time.Now()
+	r.handActCount = 0
+	r.stopNextHandTimerLocked()
 
-	// 1) 空位 bot 补位（A4.4）。
-	for i, o := range r.seats {
-		if o == nil {
-			r.seats[i] = &occupant{nick: BotNick(i), isBot: true, ready: true}
-		}
-	}
-
-	// 2) 本手牌盒：优先用后台预生成的下一手牌盒，缺则现抽（回退）。种子在开局成功后才固证。
+	// 1) 本手牌盒：优先用后台预生成的下一手牌盒，缺则现抽（回退）。种子在开局成功后才固证。
 	deck, seed := r.takeDeckLocked()
 
-	// 3) game 实例：首手 New，之后复用长实例（筹码/积分跨手延续）。
+	// 2) game 实例：首手 New，之后复用长实例（筹码/积分跨手延续）。
 	if r.game == nil {
 		gc := GameConfig(r.cfg, r.turnTimeoutSeconds, r.timing.MaxRebuys)
 		r.game = game.New(gc, deck)
 		go r.run(r.game.Events())
 	}
 
-	// 4) 同步 game 座位绑定（人来了可替换：改绑昵称 / 新入座补绑）。
+	// 3) 同步 game 座位绑定（人来了可替换：改绑昵称 / 新入座补绑）。
 	for i, o := range r.seats {
 		if o == nil {
 			continue
@@ -817,15 +1144,12 @@ func (r *Room) beginHandLocked() {
 		}
 	}
 
-	// 5) 换新牌池（长实例每手换盒；可复现性由 hands.deck 落库保证：deck 即回放真源）。
+	// 4) 换新牌池（长实例每手换盒；可复现性由 hands.deck 落库保证：deck 即回放真源）。
 	if err := r.game.SetDeck(deck); err != nil {
-		// 装盒失败即中止：此时未落任何房间状态，保持 waiting 可重新 ready 开局。
-		slog.Error("game.SetDeck 失败，开局中止", "room", r.code, "err", err)
-		r.broadcastErrorLocked(errCode(err, game.CodeBadState), err.Error())
-		return
+		return fmt.Errorf("%s: %w", errCode(err, game.CodeBadState), err)
 	}
 
-	// 6) 落手牌行（牌池记账，可回放）。失败中止并回滚手序号，保持 waiting 可重新 ready 开局。
+	// 5) 落手牌行（牌池记账，可回放）。失败中止并回滚手序号，保持 waiting。
 	r.handSeq++
 	r.actionSeq = 0
 	deckJSON, _ := json.Marshal(deck)
@@ -835,25 +1159,19 @@ func (r *Room) beginHandLocked() {
 	})
 	if err != nil {
 		r.handSeq--
-		slog.Error("落手牌行失败，开局中止", "room", r.code, "err", err)
-		r.broadcastErrorLocked(game.CodeInternal, err.Error())
-		return
+		return fmt.Errorf("%s: %w", game.CodeInternal, err)
 	}
 	r.handID = handID
 
-	// 7) 状态推进 + 开局（发牌/下注由 game 事件驱动）。
+	// 6) 状态推进 + 开局（发牌/下注由 game 事件驱动）。
 	for _, o := range r.seats {
 		if o != nil {
 			o.ready = false // 准备每手消耗一次
 		}
 	}
 	if err := r.game.Start(); err != nil {
-		// 死桌防护：开局失败不推进状态机不发事件，可重试；回滚半成品（手牌行/手序号/种子），
-		// 状态保持 waiting，绝不滞留 playing。错误码复用 game 回执码（bad_state/deck_exhausted）。
 		r.rollbackHandLocked(handID)
-		slog.Error("开局失败，已回滚", "room", r.code, "err", err)
-		r.broadcastErrorLocked(errCode(err, game.CodeBadState), err.Error())
-		return
+		return fmt.Errorf("%s: %w", errCode(err, game.CodeBadState), err)
 	}
 	r.handSeed = seed
 	r.handSeedCommit = model.SeedCommitHex(strconv.FormatInt(seed, 10))
@@ -868,8 +1186,9 @@ func (r *Room) beginHandLocked() {
 	r.broadcastLocked(model.TypeSeedCommit, model.SeedCommitPayload{Sha256: r.handSeedCommit})
 	r.tickBotsLocked()
 
-	// 8) 本手进行中后台预生成下一手牌盒（seed 独立；未就绪/失败届时回退现抽）。
+	// 7) 本手进行中后台预生成下一手牌盒（seed 独立；未就绪/失败届时回退现抽）。
 	go r.prepNextDeck()
+	return nil
 }
 
 // rollbackHandLocked 回滚开局半成品：删已落手牌行、退手序号、清种子固证。
@@ -936,6 +1255,7 @@ func (r *Room) freeSeatLocked(seat int) {
 		}
 	}
 	r.seats[seat] = nil
+	r.updateHostLocked()  // 房主座位失效→转交仍在座真人；无真人则留空由生命周期处理
 	r.latestValid = false // 事务快照已过期，下一次状态帧从 game 重拍
 }
 
@@ -1011,46 +1331,52 @@ func (r *Room) scheduleNextHandLocked() {
 	if r.timing.NextHandDelay <= 0 || r.closed || r.status != model.StatusWaiting {
 		return
 	}
+	if r.cfg.RoomKind != model.RoomKindPractice || r.cfg.NextHandPolicy != model.NextHandAutomatic {
+		return // 朋友房/手动模式：没有自动开局排程
+	}
 	r.stopNextHandTimerLocked()
+	r.nextHandGen++
+	gen := r.nextHandGen
 	startAt := time.Now().Add(r.timing.NextHandDelay)
 	at := startAt.UnixMilli()
 	r.nextHandAt = &at
-	r.nextHandTimer = time.AfterFunc(r.timing.NextHandDelay, r.onNextHandTick)
+	r.nextHandTimer = time.AfterFunc(r.timing.NextHandDelay, func() { r.onNextHandTick(gen) })
 	r.broadcastLocked(model.TypeNextHand, model.NextHandPayload{StartAt: at})
 }
 
-// stopNextHandTimerLocked 取消下一手排程（提前开局/关桌时清场）。
+// stopNextHandTimerLocked 取消下一手排程（策略切换/提前开局/关桌时清场）并让旧回调失效。
 func (r *Room) stopNextHandTimerLocked() {
 	if r.nextHandTimer != nil {
 		r.nextHandTimer.Stop()
 		r.nextHandTimer = nil
 	}
+	r.nextHandGen++
 	r.nextHandAt = nil
 }
 
-// onNextHandTick 下一手排程到点：active≥2 且有在座人类即自动开局；
-// 不足则继续等待（新玩家入座可 ready 开局，下一次排程随下一手 settled 产生）。
-func (r *Room) onNextHandTick() {
+// onNextHandTick 自动续局到点：仅练习房 + 明示 automatic；条件不满足则不偷偷开局。
+func (r *Room) onNextHandTick(gen int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if gen != r.nextHandGen {
+		return // 旧代际定时器：策略已被取消/替换
+	}
 	r.nextHandTimer = nil
 	if r.closed || r.status != model.StatusWaiting {
 		return
 	}
-	occupied, humans := 0, 0
-	for _, o := range r.seats {
-		if o == nil {
-			continue
-		}
-		occupied++
-		if !o.isBot {
-			humans++
-		}
-	}
-	if humans == 0 || occupied < 2 {
+	if r.cfg.RoomKind != model.RoomKindPractice || r.cfg.NextHandPolicy != model.NextHandAutomatic {
 		return
 	}
-	r.beginHandLocked()
+	humans, bots := r.humanBotCountsLocked()
+	if humans == 0 || humans+bots < 2 {
+		return
+	}
+	if err := r.beginHandLocked(); err != nil {
+		slog.Error("自动续局失败，保持等待", "room", r.code, "err", err)
+		r.broadcastErrorLocked(errCode(err, "start_failed"), err.Error())
+		r.refreshStateLocked()
+	}
 }
 
 // scheduleReapLocked 排程一次巡检（自续）：断线回收 + 空闲房回收。
@@ -1260,6 +1586,7 @@ func (r *Room) handleEvent(ev game.Event) {
 				Type: ap.Type, Amount: ap.Amount, At: model.Now(),
 			})
 		}
+		r.handActCount++
 		r.broadcastLocked(model.TypeActed, raw)
 
 	case model.TypeRevealed:
@@ -1288,6 +1615,12 @@ func (r *Room) handleEvent(ev game.Event) {
 		r.broadcastLocked(model.TypeShowdown, raw)
 
 	case model.TypeSettled:
+		if !r.handStartedAt.IsZero() {
+			slog.Info("本手节奏", "room", r.code, "hand", r.handSeq,
+				"durationMs", time.Since(r.handStartedAt).Milliseconds(),
+				"actions", r.handActCount)
+			r.handStartedAt = time.Time{}
+		}
 		r.broadcastLocked(model.TypeSettled, raw)
 		r.onSettledLocked(raw)
 

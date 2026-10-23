@@ -120,6 +120,8 @@ func TestBotSelfPlay(t *testing.T) {
 		RevealRate:   0,
 		DeckStrategy: "stratified",
 		DeckSize:     78,
+		RoomKind:     model.RoomKindPractice, BotPolicy: model.BotPolicyFill,
+		TargetHumanCount: 2, NextHandPolicy: model.NextHandManual,
 	}
 	bp := DefaultBotParams()
 	bp.DelayMs = 0 // 自对局不吃思考延迟（真实节奏由 botAct 定时器路径覆盖）
@@ -145,9 +147,7 @@ func TestBotSelfPlay(t *testing.T) {
 	// 帧统计在本 goroutine 内同步做，无共享可变状态。
 	actedPerHand := make([]int, 0, hands) // 按手序记录下行 acted 数（回放对账用）
 	errorFrames := 0
-	if err := r.Ready(0); err != nil {
-		t.Fatalf("首手 ready: %v", err)
-	}
+	readyAndStart(t, r, 0)
 	for h := 1; h <= hands; h++ {
 		acted := 0
 		settled := false
@@ -201,9 +201,7 @@ func TestBotSelfPlay(t *testing.T) {
 		}
 
 		if h < hands {
-			if err := r.Ready(0); err != nil {
-				t.Fatalf("第 %d 手后 ready: %v", h, err)
-			}
+			readyAndStart(t, r, 0)
 		}
 	}
 

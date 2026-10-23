@@ -17,7 +17,20 @@ async function renderRoom() {
   // 静态导入会先于 stubEnv 执行而固定成非 mock（真实 REST/WS 路径），故此处必须延迟加载
   const { default: RoomPage } = await import('./RoomPage')
   return render(
-    <MemoryRouter initialEntries={['/room/DEMO']}>
+    <MemoryRouter
+      initialEntries={[
+        {
+          pathname: '/room/DEMO',
+          state: {
+            nick: '你',
+            roomKind: 'practice',
+            botPolicy: 'fill',
+            targetHumanCount: 2,
+            nextHandPolicy: 'automatic',
+          },
+        },
+      ]}
+    >
       <Routes>
         <Route path="/room/:code" element={<RoomPage />} />
         <Route path="/" element={<div data-testid="lobby">大厅</div>} />
@@ -26,17 +39,27 @@ async function renderRoom() {
   )
 }
 
+/** 准备 + 房主显式开始：ready 不再自动发牌。 */
+async function readyAndStart() {
+  fireEvent.click(screen.getByRole('button', { name: '我准备好了' }))
+  await act(async () => {})
+  const start = screen.getByRole('button', { name: '开始游戏' }) as HTMLButtonElement
+  expect(start.disabled).toBe(false)
+  fireEvent.click(start)
+  await act(async () => {})
+}
+
 describe('RoomPage 装配', () => {
   it('准备室：显示权威座位名单；本人准备后进入牌桌（阶段进度 + 行动区）', async () => {
     await renderRoom()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('DEMO')
-    expect(screen.getByTestId('conn-status').textContent).toContain('mock')
+    expect(screen.getByTestId('conn-status').textContent).toContain('本地演示桌')
     // 准备室：不渲染下注条/空公共牌/零底池
     const seats = await screen.findByTestId('waiting-seats')
     expect(seats.textContent).toContain('机器人')
     expect(screen.queryByTestId('action-bar')).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: '我准备好了' }))
+    await readyAndStart()
     const bar = await screen.findByTestId('action-bar')
     // 对局页四区：阶段进度 + 行动区；非本人回合只保留一行状态
     expect(screen.getByTestId('phase-progress')).toBeTruthy()
@@ -46,8 +69,9 @@ describe('RoomPage 装配', () => {
   it('牌池抽屉：准备后进入牌桌，开合自如，盒名单 13 张', async () => {
     await renderRoom()
     await screen.findByTestId('waiting-seats')
-    fireEvent.click(screen.getByRole('button', { name: '我准备好了' }))
+    await readyAndStart()
     await screen.findByTestId('action-bar')
+    fireEvent.click(screen.getByRole('button', { name: '更多' }))
     fireEvent.click(screen.getByRole('button', { name: '牌池' }))
     expect(screen.getAllByTestId('box-row')).toHaveLength(13)
     fireEvent.click(screen.getByRole('button', { name: '关闭牌池' }))
@@ -67,7 +91,7 @@ describe('RoomPage 装配', () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(300)
       })
-      fireEvent.click(screen.getByRole('button', { name: '我准备好了' }))
+      await readyAndStart()
       await act(async () => {
         await vi.advanceTimersByTimeAsync(900)
       })
@@ -113,17 +137,22 @@ describe('RoomPage 装配', () => {
   it('聊天未读徽标：浮窗收起期间到达的消息计数，打开清零', async () => {
     await renderRoom()
     await screen.findByTestId('waiting-seats')
-    fireEvent.click(screen.getByRole('button', { name: '我准备好了' }))
+    await readyAndStart()
     await screen.findByTestId('action-bar')
     // 开浮窗发一条：自己的回显即时到达（浮窗开着不计数）；bot 应答在 1200ms 后到
-    fireEvent.click(screen.getByRole('button', { name: /表情与聊天/ }))
+    const openMenu = () => fireEvent.click(screen.getByRole('button', { name: /更多/ }))
+    const toggleChat = () => fireEvent.click(screen.getByRole('button', { name: /表情与聊天/ }))
+    openMenu()
+    toggleChat()
     fireEvent.change(screen.getByLabelText('聊天输入'), { target: { value: '你好' } })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
-    fireEvent.click(screen.getByRole('button', { name: /表情与聊天/ })) // 收起
+    openMenu()
+    toggleChat() // 收起
     expect(screen.queryByTestId('chat-unread')).toBeNull()
     const badge = await screen.findByTestId('chat-unread', {}, { timeout: 4000 })
     expect(badge.textContent).toBe('1')
-    fireEvent.click(screen.getByRole('button', { name: /表情与聊天/ })) // 打开清零
+    openMenu()
+    toggleChat() // 打开清零
     expect(screen.queryByTestId('chat-unread')).toBeNull()
   })
 })

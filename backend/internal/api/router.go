@@ -63,6 +63,11 @@ type createRoomReq struct {
 	MinVotes        *int               `json:"minVotes"`    // 作品标注数下限（评分人数；0=不过滤）
 	ChatEnabled     *bool              `json:"chatEnabled"` // 房主聊天开关（缺省 true）
 	ThemeFilter     *model.ThemeFilter `json:"themeFilter"` // deckStrategy=theme 时携带
+	// ===== 第二轮房间策略 =====
+	RoomKind         *string `json:"roomKind"`         // friend | practice
+	BotPolicy        *string `json:"botPolicy"`        // off | fill
+	TargetHumanCount *int    `json:"targetHumanCount"` // 期望参局人数
+	NextHandPolicy   *string `json:"nextHandPolicy"`   // manual | automatic
 }
 
 // roomDTO 是房间对外形态（建房响应与列表条目同形）。
@@ -82,6 +87,12 @@ type roomDTO struct {
 	HumanCount int    `json:"humanCount"`
 	BotCount   int    `json:"botCount"`
 	Joinable   bool   `json:"joinable"`
+	// ===== 第二轮房间策略 =====
+	RoomKind         string `json:"roomKind"`
+	BotPolicy        string `json:"botPolicy"`
+	TargetHumanCount int    `json:"targetHumanCount"`
+	NextHandPolicy   string `json:"nextHandPolicy"`
+	HostSeat         int    `json:"hostSeat"`
 }
 
 // joinRoomReq 是入座参数（v2：凭 resumeToken 恢复身份、joinRequestId 幂等）。
@@ -150,6 +161,19 @@ func (d Deps) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 	if req.ThemeFilter != nil {
 		cfg.ThemeFilter = req.ThemeFilter
 	}
+	if req.RoomKind != nil {
+		cfg.RoomKind = strings.ToLower(*req.RoomKind)
+	}
+	if req.BotPolicy != nil {
+		cfg.BotPolicy = strings.ToLower(*req.BotPolicy)
+	}
+	if req.TargetHumanCount != nil {
+		cfg.TargetHumanCount = *req.TargetHumanCount
+	}
+	if req.NextHandPolicy != nil {
+		cfg.NextHandPolicy = strings.ToLower(*req.NextHandPolicy)
+	}
+	cfg = model.NormalizeRoomConfig(cfg)
 	if err := config.ValidateRoomDefaults(cfg); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad_config", err.Error())
 		return
@@ -275,6 +299,9 @@ func summaryToDTO(s room.Summary, revealRate int) roomDTO {
 		RevealRate: revealRate, Players: s.Players, Status: s.Status,
 		Phase: s.Phase, HandSeq: s.HandSeq, HumanCount: s.HumanCount,
 		BotCount: s.BotCount, Joinable: s.Joinable,
+		RoomKind: s.RoomKind, BotPolicy: s.BotPolicy,
+		TargetHumanCount: s.TargetHumanCount, NextHandPolicy: s.NextHandPolicy,
+		HostSeat: s.HostSeat,
 	}
 }
 

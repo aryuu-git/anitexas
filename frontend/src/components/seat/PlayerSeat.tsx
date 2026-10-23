@@ -18,6 +18,8 @@ export interface PlayerSeatProps {
   seat: SeatState
   isTurn: boolean
   isMe?: boolean
+  /** 服务端确认的房主座位 */
+  isHost?: boolean
   /** 1 = 近侧（正立）；-1 = 远侧（牌背朝下） */
   facing?: 1 | -1
   /** 摊牌后的牌型名 */
@@ -40,6 +42,7 @@ export function PlayerSeat({
   seat,
   isTurn,
   isMe = false,
+  isHost = false,
   facing = 1,
   tierName,
   emote,
@@ -75,7 +78,7 @@ export function PlayerSeat({
   )
   const plate = (
     <span className="flex flex-col items-center gap-0.5">
-      <SeatPlate seat={seat} isMe={isMe} />
+      <SeatPlate seat={seat} isMe={isMe} isHost={isHost} />
       {tierName && (
         <span className="rounded-chip border border-gold-foil/40 bg-gold-foil/10 px-1.5 py-0.5 text-micro text-gold-foil">
           {tierName}

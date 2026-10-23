@@ -94,12 +94,12 @@ export function RevealConfirm({ card, scope, revealRate, onConfirm, onCancel }: 
           </li>
           <li className="flex items-center gap-2 rounded-tile border border-gold/15 bg-ink-deep/40 px-3.5 py-2.5">
             <span className="whitespace-nowrap text-gold-foil">不可撤销</span>
-            <span className="text-muted">看过就是看过，不能收回（D3）</span>
+            <span className="text-muted">看过就是看过，不能收回</span>
           </li>
           <li className="flex items-center gap-2 rounded-tile border border-gold-foil/30 bg-gold-foil/10 px-3.5 py-2.5">
-            <span className="whitespace-nowrap text-gold-foil">揭示成本</span>
+            <span className="whitespace-nowrap text-gold-foil">{revealRate > 0 ? '揭示成本' : '免费查看'}</span>
             <span className="text-muted">
-              {revealRate} 积分/次（v1 费率 0，只记账不扣分，D4）
+              {revealRate > 0 ? `${revealRate} 积分/次` : '本次查看不扣积分'}
             </span>
           </li>
         </ul>

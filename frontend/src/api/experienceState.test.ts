@@ -85,7 +85,7 @@ describe('deriveExperienceState · actionMode 优先级', () => {
     )
     expect(ready.actionMode).toBe('waitingNextHand')
     expect(ready.myReady).toBe(true)
-    expect(ready.readyProgress).toBe('还没有其他真人，准备后自动补齐机器人')
+    expect(ready.readyProgress).toBe('还没有真人入座')
   })
 
   it('本地命令确认/核对优先于其它动作模式', () => {
@@ -183,15 +183,15 @@ describe('deriveExperienceState · 阶段进度与文案', () => {
 
   it('等待/结算文案反映真实下一手策略', () => {
     const waiting = deriveExperienceState(state(), LIVE)
-    expect(waiting.statusTitle).toBe('等待开局')
-    expect(waiting.nextHint).toBe('全体真人准备后开始下一手')
+    expect(waiting.statusTitle).toBe('准备室 · 等待房主开始')
+    expect(waiting.nextHint).toBe('房主点击开始后发牌')
 
     const auto = deriveExperienceState(
       state({ phase: 'settled', handSeq: 1, lastResult: result, nextHandPolicy: 'automatic', nextHandAt: 1 }),
       LIVE,
     )
     expect(auto.statusTitle).toBe('本手结束')
-    expect(auto.nextHint).toBe('下一手将按排程自动开始')
+    expect(auto.nextHint).toBe('自动续局已排程')
   })
 })
 

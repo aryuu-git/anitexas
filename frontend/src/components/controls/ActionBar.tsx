@@ -207,7 +207,7 @@ export function ActionBar({
   return (
     <div
       data-testid="action-bar"
-      className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-panel border border-gold-foil/25 bg-panel px-4 py-3 shadow-panel md:px-6"
+      className="flex flex-wrap items-center gap-x-3 gap-y-3 rounded-panel border border-gold-foil/25 bg-panel px-4 py-3 shadow-panel md:px-6"
     >
       {/* 回合 + 倒计时（≤10 秒转红，SeatTimer 同款语义） */}
       <div className="flex items-center gap-3">
@@ -219,11 +219,18 @@ export function ActionBar({
                 : 'border-gold-foil/60 text-gold-foil'
               : 'border-gold/20 text-muted'
           }`}
-          aria-label={`剩余 ${remaining} 秒（本桌限时 ${turnSeconds} 秒）`}
+          aria-label={`剩余 ${remaining} 秒（本桌限时 ${turnSeconds} 秒，超时自动过牌或弃牌）`}
         >
           {isMyTurn ? remaining : '—'}
         </span>
-        {!status && <span className="font-serif text-body-lg text-gold-light">轮到你</span>}
+        {!status && (
+          <span className="font-serif text-body-lg text-gold-light">
+            轮到你
+            <span className="ml-1.5 font-sans text-micro font-normal text-muted" data-testid="my-bet">
+              已投 {myBet}
+            </span>
+          </span>
+        )}
       </div>
 
       {status ? (
@@ -260,7 +267,7 @@ export function ActionBar({
                 data-action={isBet ? 'bet' : 'raise'}
                 onClick={() => setPanelOpen((v) => !v)}
               >
-                {isBet ? '下注…' : '加注…'}
+                {isBet ? '下注' : '加注'}
               </Button>
             )}
           </div>

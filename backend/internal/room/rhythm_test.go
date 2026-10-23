@@ -44,7 +44,7 @@ func newRhythmRoom(t *testing.T, cfg model.RoomConfig, timing Timing, turnTimeou
 	for i := 1; i < 4; i++ {
 		occ := &occupant{nick: BotNick(i), isBot: true, ready: true}
 		if i == 1 {
-			occ.link = obs
+			occ.link = obs // 观测链路挂 bot：房主保持“无链路”，由 botAct 代打
 		}
 		r.seats[i] = occ
 	}
@@ -126,18 +126,21 @@ func TestStartFailureNoDeadTableAndRecover(t *testing.T) {
 	t.Cleanup(r.Close)
 	obs := newObsLink()
 	for i := 1; i < 4; i++ {
-		occ := &occupant{nick: BotNick(i), isBot: true, ready: true}
-		if i == 1 {
-			occ.link = obs
-		}
-		r.seats[i] = occ
+		r.seats[i] = &occupant{nick: BotNick(i), isBot: true, ready: true}
 	}
 	if _, err := r.Join("host"); err != nil {
 		t.Fatalf("host 入座: %v", err)
 	}
+	// 命令拒绝只回给房主本人，因此把观测链路挂在房主座位。
+	if err := r.Attach(0, obs); err != nil {
+		t.Fatalf("挂观测链路: %v", err)
+	}
 
 	if err := r.Ready(0); err != nil {
 		t.Fatalf("ready: %v", err)
+	}
+	if err := r.StartGame(0, model.StartPayload{}); err == nil {
+		t.Fatal("牌堆不足时开局应失败")
 	}
 	env := waitFrame(t, obs, 2*time.Second, "开局失败 error",
 		func(e model.Envelope) bool { return e.T == model.TypeError })
@@ -167,6 +170,9 @@ func TestStartFailureNoDeadTableAndRecover(t *testing.T) {
 	if err := r.Ready(0); err != nil {
 		t.Fatalf("重开 ready: %v", err)
 	}
+	if err := r.StartGame(0, model.StartPayload{}); err != nil {
+		t.Fatalf("重开 start: %v", err)
+	}
 	waitFrame(t, obs, 2*time.Second, "重开 seedCommit",
 		func(e model.Envelope) bool { return e.T == model.TypeSeedCommit })
 	r.mu.Lock()
@@ -180,23 +186,20 @@ func TestStartFailureNoDeadTableAndRecover(t *testing.T) {
 	}
 }
 
-// TestNextHandAutoStartAndReadyEarly 下一手节奏（改动 2）：settled 后广播 nextHand{startAt}；
-// 到点 active≥2 自动开局（不再要求全员 ready）；全员 ready 远早于排程提前开局。
-func TestNextHandAutoStartAndReadyEarly(t *testing.T) {
+// TestNextHandAutoStartAndPause 练习房自动续局：settled 后服务端排程并自动开手；
+// 房主切回手动后旧定时器必须失效，不再偷偷开局。
+func TestNextHandAutoStartAndPause(t *testing.T) {
 	cfg := baseCfg()
 	cfg.Chips = 100000
 	cfg.DeckSize = 78
+	cfg.NextHandPolicy = model.NextHandAutomatic
 	delay := 2 * time.Second
 	r, obs := newRhythmRoom(t, cfg, Timing{NextHandDelay: delay}, 0, calmBotParams(0))
 
-	// 第一手：全员 ready 开局，跑到 settled。
-	if err := r.Ready(0); err != nil {
-		t.Fatalf("ready: %v", err)
-	}
+	readyAndStart(t, r, 0)
 	nextSettled(t, obs, "第一手")
 
-	// settled 后广播 nextHand{startAt ≈ 排程时刻+delay}（排程在收尾账落库之后，
-	// 以帧到达时刻为基准比对，容 DB 落账时延）。
+	// settled 后广播 nextHand{startAt ≈ 排程时刻+delay}。
 	env := waitFrame(t, obs, 2*time.Second, "nextHand",
 		func(e model.Envelope) bool { return e.T == model.TypeNextHand })
 	var nh model.NextHandPayload
@@ -207,21 +210,38 @@ func TestNextHandAutoStartAndReadyEarly(t *testing.T) {
 		t.Fatalf("nextHand.startAt 距观察时刻 %dms，want ≈ %v（now+delay）", d, delay)
 	}
 
-	// 到点自动开局：不发任何 ready，等下一手 seedCommit。
+	// 到点自动开局：不点 ready，等下一手 seedCommit。
 	waitFrame(t, obs, 3*delay+4*time.Second, "自动开局 seedCommit",
 		func(e model.Envelope) bool { return e.T == model.TypeSeedCommit })
 	nextSettled(t, obs, "第二手")
 
-	// 全员 ready 提前开局：远早于 delay 排程。
-	readyAt := time.Now()
-	if err := r.Ready(0); err != nil {
-		t.Fatalf("提前 ready: %v", err)
+	// 暂停自动续局：服务端取消排程，旧定时器不得再开局。
+	waitFrame(t, obs, 2*time.Second, "第三手排程", func(e model.Envelope) bool {
+		return e.T == model.TypeNextHand
+	})
+	if err := r.SetNextHandPolicy(0, model.NextPolicyPayload{Policy: model.NextHandManual}); err != nil {
+		t.Fatalf("暂停自动续局: %v", err)
 	}
-	waitFrame(t, obs, delay/2, "提前开局 seedCommit",
+	drain(obs)
+	select {
+	case raw := <-obs.ch:
+		env, _ := model.DecodeEnvelope(raw)
+		if env.T == model.TypeSeedCommit {
+			t.Fatal("切回手动后仍自动开局")
+		}
+	case <-time.After(delay + 1500*time.Millisecond):
+	}
+	r.mu.Lock()
+	nextHandAt := r.nextHandAt
+	r.mu.Unlock()
+	if nextHandAt != nil {
+		t.Fatalf("手动策略下 nextHandAt 应为 nil，实得 %v", *nextHandAt)
+	}
+
+	// 手动模式仍可由房主 ready + start 开下一手。
+	readyAndStart(t, r, 0)
+	waitFrame(t, obs, 2*time.Second, "手动开局 seedCommit",
 		func(e model.Envelope) bool { return e.T == model.TypeSeedCommit })
-	if elapsed := time.Since(readyAt); elapsed >= delay {
-		t.Fatalf("提前开局耗时 %v，应早于排程 %v", elapsed, delay)
-	}
 }
 
 // TestDisconnectRecycleWaiting 断线回收（改动 3/6）：waiting 态真人断线超宽限立即 freeSeat，
@@ -310,9 +330,7 @@ func TestDisconnectRecyclePlayingMarksPendingLeave(t *testing.T) {
 		ReapInterval:    40 * time.Millisecond,
 	}, 0, calmBotParams(3000))
 
-	if err := r.Ready(0); err != nil {
-		t.Fatalf("ready: %v", err)
-	}
+	readyAndStart(t, r, 0)
 	waitFrame(t, obs, 5*time.Second, "开局 seedCommit",
 		func(e model.Envelope) bool { return e.T == model.TypeSeedCommit })
 
@@ -411,9 +429,7 @@ func TestRebuyCapExhaustedLeaves(t *testing.T) {
 	}
 
 	// 第一手跑起来（game 实例就绪）。
-	if err := r.Ready(0); err != nil {
-		t.Fatalf("ready: %v", err)
-	}
+	readyAndStart(t, r, 0)
 	nextSettled(t, obs, "第 1 手")
 
 	// 预支 harness 的唯一一次重买：破产处置时 Rebuy 必回 rebuy_exhausted。
@@ -435,9 +451,7 @@ func TestRebuyCapExhaustedLeaves(t *testing.T) {
 		}
 		r.seats[1].link = obs
 		r.mu.Unlock()
-		if err := r.Ready(0); err != nil {
-			t.Fatalf("第 %d 手 ready: %v", h, err)
-		}
+		readyAndStart(t, r, 0)
 		nextSettled(t, obs, fmt.Sprintf("第 %d 手", h))
 		// settled 广播与破产处置同临界区：此刻抢到 r.mu 即处置已收尾。
 		r.mu.Lock()
@@ -497,9 +511,7 @@ func TestSnapshotContractFields(t *testing.T) {
 	}
 
 	// 开局跑到中局（bot 思考 300ms，中局快照安全）。
-	if err := r.Ready(0); err != nil {
-		t.Fatalf("ready: %v", err)
-	}
+	readyAndStart(t, r, 0)
 	waitFrame(t, obs, 5*time.Second, "开局 seedCommit",
 		func(e model.Envelope) bool { return e.T == model.TypeSeedCommit })
 	r.mu.Lock()

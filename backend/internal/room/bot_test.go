@@ -82,6 +82,8 @@ func TestBotRaiseWarConverges(t *testing.T) {
 		RevealRate:   0,
 		DeckStrategy: "stratified",
 		DeckSize:     78,
+		RoomKind:     model.RoomKindPractice, BotPolicy: model.BotPolicyFill,
+		TargetHumanCount: 2, NextHandPolicy: model.NextHandManual,
 	}
 	bp := DefaultBotParams()
 	bp.DelayMs = 0
@@ -108,9 +110,7 @@ func TestBotRaiseWarConverges(t *testing.T) {
 	}
 
 	const hands = 2
-	if err := r.Ready(0); err != nil {
-		t.Fatalf("首手 ready: %v", err)
-	}
+	readyAndStart(t, r, 0)
 	for h := 1; h <= hands; h++ {
 		settled := false
 		raises, bets, acted := 0, 0, 0
@@ -155,9 +155,7 @@ func TestBotRaiseWarConverges(t *testing.T) {
 			t.Errorf("第 %d 手 bet=%d 超出每街一次开注的上限 4", h, bets)
 		}
 		if h < hands {
-			if err := r.Ready(0); err != nil {
-				t.Fatalf("第 %d 手后 ready: %v", h, err)
-			}
+			readyAndStart(t, r, 0)
 		}
 	}
 }

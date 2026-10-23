@@ -40,11 +40,25 @@ func newChatRoom(t *testing.T, cfg model.RoomConfig) (*Room, *obsLink) {
 }
 
 // baseCfg 是收尾轮共用的合法建房配置。
+// 测试桌默认按练习房构造：单真人 + 机器人即可开局，且 ready 后仍需房主显式 start。
 func baseCfg() model.RoomConfig {
 	return model.RoomConfig{
 		AutoReveal: false, Seats: 4, SmallBlind: 1, BigBlind: 2,
 		Chips: 1000, RevealRate: 0, DeckStrategy: "stratified",
 		DeckSize: 10, ChatEnabled: true,
+		RoomKind: model.RoomKindPractice, BotPolicy: model.BotPolicyFill,
+		TargetHumanCount: 2, NextHandPolicy: model.NextHandManual,
+	}
+}
+
+// readyAndStart 模拟真实主流程：玩家准备 + 房主主动开始（ready 本身不再开局）。
+func readyAndStart(t *testing.T, r *Room, seat int) {
+	t.Helper()
+	if err := r.Ready(seat); err != nil {
+		t.Fatalf("准备: %v", err)
+	}
+	if err := r.StartGame(seat, model.StartPayload{}); err != nil {
+		t.Fatalf("房主开始: %v", err)
 	}
 }
 
@@ -285,6 +299,8 @@ func driveHand(t *testing.T, r *Room, obs *obsLink, readySeat int, terminal stri
 	if err := r.Ready(readySeat); err != nil {
 		t.Fatalf("ready: %v", err)
 	}
+	// ready 只表达意愿；真实开局必须由房主显式 start（失败时由 error 下行体现）。
+	_ = r.StartGame(readySeat, model.StartPayload{})
 	for {
 		select {
 		case raw := <-obs.ch:

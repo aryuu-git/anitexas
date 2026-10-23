@@ -61,6 +61,11 @@ export interface MockDeskOptions {
   deckStrategy?: DeckStrategy
   /** 主题过滤项（deckStrategy=theme 时携带） */
   themeFilter?: ThemeFilter | null
+  /** 第二轮策略：mock 用作练习房演示 */
+  roomKind?: 'friend' | 'practice'
+  botPolicy?: 'off' | 'fill'
+  targetHumanCount?: number
+  nextHandPolicy?: 'manual' | 'automatic'
 }
 
 const SEAT_IDS = [0, 1, 2, 3]
@@ -107,6 +112,8 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
   const instanceId = `mock-${opts.roomCode}-1`
   let revision = 0
   let nextHandAt: number | null = null
+  let policy: 'manual' | 'automatic' = opts.nextHandPolicy ?? 'manual'
+  const nextHandPolicy = () => policy
   let lastResult: HandResult | null = null
   let eventSeq = 0
   const chips = new Array<number>(SEAT_IDS.length).fill(START_CHIPS)
@@ -224,7 +231,7 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
       revision,
       roomStatus: phase === 'playing' ? 'playing' : 'waiting',
       nextHandAt,
-      nextHandPolicy: 'automatic',
+      nextHandPolicy: nextHandPolicy(),
       readiness: {
         eligibleSeats: [0],
         readySeats: ready[0] ? [0] : [],
@@ -243,6 +250,16 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
       runout: false,
       lastResult,
       recentEvents: [],
+      roomKind: 'practice',
+      botPolicy: 'fill',
+      targetHumanCount: opts.targetHumanCount ?? 2,
+      hostSeat: 0,
+      isHost: true,
+      canStart: phase !== 'playing' && ready[0],
+      startBlockedReason:
+        phase === 'playing' ? '本手正在进行' : ready[0] ? '' : '等待 你 准备',
+      humanCount: 1,
+      botCount: 3,
     }
   }
 
@@ -555,19 +572,23 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
     }
   }
 
-  /** 下一手排程：nextHand 广播 + 到点自动开局（active ≥ 2）；全员 ready 可提前 */
+  /** 下一手排程：仅明示 automatic 的练习房；手动模式不排程、不自动发牌 */
   const scheduleNextHand = () => {
+    if (policy !== 'automatic') {
+      nextHandAt = null
+      return
+    }
     nextHandAt = Date.now() + NEXT_HAND_DELAY_MS
     emit('nextHand', { startAt: nextHandAt })
     emitState('mutation', [ev('next_hand_scheduled', null, { startAt: nextHandAt })])
     later(() => {
-      if (phase === 'settled') startHand()
+      if (phase === 'settled' && policy === 'automatic') startHand()
     }, NEXT_HAND_DELAY_MS)
   }
 
   // ===== 上行处理 =====
 
-  /** ready：waiting/settled 收下并广播 readied；全员 ready 提前开局（局中忽略） */
+  /** ready：只记录准备意愿，绝不自动开局（与真实服务端同策略）。 */
   const onReady = () => {
     if (phase === 'playing') {
       rejectPending('not_waiting')
@@ -576,23 +597,44 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
     ready[0] = true
     emit('readied', { seat: 0 })
     emitState('mutation', [ev('readied', 0)])
-    if (phase === 'waiting' && ready.every(Boolean)) {
-      startHand()
+  }
+
+  const onCancelReady = () => {
+    if (phase === 'playing') {
+      rejectPending('not_waiting')
       return
     }
-    if (phase !== 'settled') return
-    // 「立即开始」：bot 随即准备，凑满全员 ready 提前开局
-    for (const seat of [1, 2, 3]) {
-      later(() => {
-        if (phase !== 'settled') return
-        ready[seat] = true
-        emit('readied', { seat })
-        emitState('mutation', [ev('readied', seat)])
-      }, 200 * seat)
+    ready[0] = false
+    emitState('mutation')
+  }
+
+  /** 房主显式开始：朋友房/练习房都只能由这里发牌。 */
+  const onStart = () => {
+    if (phase === 'playing') {
+      rejectPending('not_waiting')
+      return
     }
-    later(() => {
-      if (phase === 'settled' && ready.every(Boolean)) startHand()
-    }, 700)
+    if (!ready[0]) {
+      rejectPending('cannot_start')
+      emit('error', { code: 'cannot_start', msg: '先准备，再开始' })
+      return
+    }
+    startHand()
+  }
+
+  const onNextPolicy = (next: 'manual' | 'automatic') => {
+    policy = next
+    if (next === 'manual') nextHandAt = null
+    emitState('mutation')
+  }
+
+  const onSetTarget = (n: number) => {
+    if (n < 2 || n > SEAT_IDS.length) {
+      rejectPending('bad_target')
+      return
+    }
+    opts.targetHumanCount = n
+    emitState('mutation')
   }
 
   const onAction = (type: ActionType, amount: number) => {
@@ -700,6 +742,24 @@ export function startMockDesk(opts: MockDeskOptions, onEvent: (e: Envelope) => v
     switch (msg.t) {
       case 'ready':
         withReceipt(msg.p.requestId, onReady)
+        return
+      case 'cancelReady':
+        withReceipt(msg.p.requestId, onCancelReady)
+        return
+      case 'start':
+        withReceipt(msg.p.requestId, onStart)
+        return
+      case 'setTarget':
+        withReceipt(msg.p.requestId, () => onSetTarget(msg.p.targetHumanCount))
+        return
+      case 'nextHandPolicy':
+        withReceipt(msg.p.requestId, () => onNextPolicy(msg.p.policy))
+        return
+      case 'addBot':
+      case 'removeBot':
+        // mock 固定四人练习桌，不支持动态增减机器人；真实后端已实现。
+        rejectPending('mock_unsupported')
+        emit('error', { code: 'mock_unsupported', msg: '演示桌不支持增减机器人' })
         return
       case 'action':
         withReceipt(msg.p.requestId, () => onAction(msg.p.type, msg.p.amount ?? 0))

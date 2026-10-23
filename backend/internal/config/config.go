@@ -167,6 +167,11 @@ func Load() (*Config, error) {
 			DeckSize:     deckSize,
 			MinVotes:     minVotes,
 			ChatEnabled:  chatEnabled,
+			// 默认朋友房：不自动补机器人、房主手动开始；target 2 人可直接开局。
+			RoomKind:         model.RoomKindFriend,
+			BotPolicy:        model.BotPolicyOff,
+			TargetHumanCount: 2,
+			NextHandPolicy:   model.NextHandManual,
 		},
 
 		TurnTimeoutSeconds: turnTimeout,
@@ -254,6 +259,27 @@ func ValidateRoomDefaults(d model.RoomConfig) error {
 	}
 	if d.MinVotes < 0 {
 		return fmt.Errorf("minVotes=%d 不得为负（0 = 不过滤）", d.MinVotes)
+	}
+	switch d.RoomKind {
+	case model.RoomKindFriend, model.RoomKindPractice:
+	default:
+		return fmt.Errorf("roomKind=%q 非法，应为 friend / practice", d.RoomKind)
+	}
+	switch d.BotPolicy {
+	case model.BotPolicyOff, model.BotPolicyFill:
+	default:
+		return fmt.Errorf("botPolicy=%q 非法，应为 off / fill", d.BotPolicy)
+	}
+	if d.TargetHumanCount < 2 || d.TargetHumanCount > d.Seats {
+		return fmt.Errorf("targetHumanCount=%d 超出范围 [2,%d]", d.TargetHumanCount, d.Seats)
+	}
+	switch d.NextHandPolicy {
+	case model.NextHandManual, model.NextHandAutomatic:
+	default:
+		return fmt.Errorf("nextHandPolicy=%q 非法，应为 manual / automatic", d.NextHandPolicy)
+	}
+	if d.RoomKind == model.RoomKindFriend && d.NextHandPolicy != model.NextHandManual {
+		return fmt.Errorf("朋友房固定手动开始下一手（nextHandPolicy=manual）")
 	}
 	// 主题过滤项校验（frontend-contract §3）：携带时校验 kind 枚举 + value 长度；
 	// theme 策略未带过滤项则不过滤（等价全库），不强卡（ROOM_DEFAULT 可裸配 theme）。

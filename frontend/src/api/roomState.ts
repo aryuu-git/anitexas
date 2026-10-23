@@ -6,6 +6,7 @@
  */
 import type {
   ActionType,
+  BotPolicy,
   BoxCard,
   CardData,
   CommandReceipt,
@@ -20,6 +21,7 @@ import type {
   Readiness,
   RemovalReason,
   RevealRecord,
+  RoomKind,
   RoomStatus,
   SeatState,
   SettledPayload,
@@ -134,6 +136,16 @@ export interface RoomState {
   nextHandPolicy: NextHandPolicy
   /** 命令回执（requestId → receipt） */
   receipts: Record<string, CommandReceipt>
+  // ===== 第二轮房间策略（服务端派生）=====
+  roomKind: RoomKind
+  botPolicy: BotPolicy
+  targetHumanCount: number
+  hostSeat: number
+  isHost: boolean
+  canStart: boolean
+  startBlockedReason: string
+  humanCount: number
+  botCount: number
 }
 
 /** 初始态（连接建立前的空桌） */
@@ -189,6 +201,15 @@ export function createRoomState(): RoomState {
     recentEvents: [],
     nextHandPolicy: 'manual',
     receipts: {},
+    roomKind: 'friend',
+    botPolicy: 'off',
+    targetHumanCount: 2,
+    hostSeat: -1,
+    isHost: false,
+    canStart: false,
+    startBlockedReason: '',
+    humanCount: 0,
+    botCount: 0,
   }
 }
 
@@ -319,6 +340,15 @@ export function applyStateFrame(state: RoomState, env: Envelope<StateFrame>): Ro
     ]),
     nextHandPolicy: p.nextHandPolicy ?? 'manual',
     receipts: mergeReceipts(newInstance ? {} : state.receipts, frame.receipts),
+    roomKind: p.roomKind ?? 'friend',
+    botPolicy: p.botPolicy ?? 'off',
+    targetHumanCount: p.targetHumanCount ?? 2,
+    hostSeat: p.hostSeat ?? -1,
+    isHost: p.isHost ?? false,
+    canStart: p.canStart ?? false,
+    startBlockedReason: p.startBlockedReason ?? '',
+    humanCount: p.humanCount ?? 0,
+    botCount: p.botCount ?? 0,
   }
 }
 
@@ -374,6 +404,15 @@ function reduceEvent(state: RoomState, env: Envelope): RoomState {
         box: p.box ?? [],
         pool: p.pool ?? null,
         nextHandAt: sameHand ? state.nextHandAt : null,
+        roomKind: p.roomKind ?? state.roomKind,
+        botPolicy: p.botPolicy ?? state.botPolicy,
+        targetHumanCount: p.targetHumanCount ?? state.targetHumanCount,
+        hostSeat: p.hostSeat ?? state.hostSeat,
+        isHost: p.isHost ?? state.isHost,
+        canStart: p.canStart ?? false,
+        startBlockedReason: p.startBlockedReason ?? '',
+        humanCount: p.humanCount ?? state.humanCount,
+        botCount: p.botCount ?? state.botCount,
       }
     }
     case 'dealt': {
@@ -542,6 +581,15 @@ interface SnapshotLike {
   seed?: string | null
   box?: BoxCard[]
   pool?: PoolInfo | null
+  roomKind?: RoomKind
+  botPolicy?: BotPolicy
+  targetHumanCount?: number
+  hostSeat?: number
+  isHost?: boolean
+  canStart?: boolean
+  startBlockedReason?: string
+  humanCount?: number
+  botCount?: number
 }
 
 /**

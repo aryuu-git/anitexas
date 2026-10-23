@@ -25,7 +25,11 @@ type a63Card struct {
 }
 
 func loadA63Library(t testing.TB) []engine.Card {
-	raw, err := os.ReadFile("../../../data/cards.json")
+	path := os.Getenv("CARDS_PATH")
+	if path == "" {
+		path = "../../../data/cards.json"
+	}
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read cards.json: %v", err)
 	}

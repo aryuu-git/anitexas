@@ -61,14 +61,35 @@ export interface ExperienceView {
   inHand: boolean
   /** 淘汰/离席说明 */
   removalNotice: string | null
+  /** ===== 第二轮房间策略（服务端派生）===== */
+  isHost: boolean
+  canStart: boolean
+  startBlockedReason: string
+  targetHumanCount: number
+  humanCount: number
+  botCount: number
+  roomKind: 'friend' | 'practice'
+  botPolicy: 'off' | 'fill'
 }
 
 /** 派生输入：连接是否已收到权威帧、是否已有房间身份 */
 export interface ExperienceSession {
   live: boolean
   hasIdentity: boolean
-  /** 本地下注/准备命令确认态 */
-  pending?: { type: ActionType | 'ready' | 'leave'; verifying: boolean } | null
+  /** 本地命令确认态（下注/准备/取消准备/开始/机器人/人数/续局/离席） */
+  pending?: {
+    type:
+      | ActionType
+      | 'ready'
+      | 'cancelReady'
+      | 'start'
+      | 'addBot'
+      | 'removeBot'
+      | 'setTarget'
+      | 'nextHandPolicy'
+      | 'leave'
+    verifying: boolean
+  } | null
 }
 
 const BETTING_PHASES: Phase[] = ['preflop', 'flop', 'turn', 'river']
@@ -184,17 +205,23 @@ export function deriveExperienceState(state: RoomState, session: ExperienceSessi
   let statusDetail = ''
   let nextHint = ''
   if (state.phase === 'waiting') {
-    statusTitle = state.handSeq === 0 ? '等待开局' : '本手结束'
+    statusTitle = state.handSeq === 0 ? (state.isHost ? '准备室 · 等待朋友' : '准备室 · 等待房主开始') : '本手结束'
     statusDetail =
       state.handSeq === 0
-        ? '真人准备后自动补齐机器人并发牌'
+        ? `真人 ${state.humanCount}/${state.targetHumanCount}${state.botCount > 0 ? ` · 机器人 ${state.botCount}` : ''}`
         : state.lastResult?.endReason === 'fold_win'
           ? '其他玩家弃牌，本手提前结束'
           : '牌型比较完成，等待下一手'
     nextHint =
       state.nextHandPolicy === 'automatic' && state.nextHandAt != null
-        ? '下一手将按排程自动开始'
-        : '全体真人准备后开始下一手'
+        ? '自动续局已排程'
+        : state.handSeq === 0
+          ? state.isHost
+            ? state.startBlockedReason || '所有人准备后，由你点击开始'
+            : '房主点击开始后发牌'
+          : state.isHost
+            ? state.startBlockedReason || '准备后由你点击开始下一手'
+            : '准备后等待房主开始下一手'
   } else if (state.phase === 'showdown') {
     statusTitle = '正在比较牌型'
     statusDetail = '系统选择最佳五张'
@@ -204,8 +231,8 @@ export function deriveExperienceState(state: RoomState, session: ExperienceSessi
     statusDetail = state.lastResult?.endReason === 'fold_win' ? '其他玩家弃牌，提前收池' : '摊牌与账本已结算'
     nextHint =
       state.nextHandPolicy === 'automatic' && state.nextHandAt != null
-        ? '下一手将按排程自动开始'
-        : '全体真人准备后开始下一手'
+        ? '自动续局已排程'
+        : '准备后由房主开始下一手'
   } else {
     const meta = PHASE_META[state.phase as 'preflop' | 'flop' | 'turn' | 'river']
     statusTitle = `${meta.label} · 第 ${state.handSeq} 手`
@@ -227,7 +254,7 @@ export function deriveExperienceState(state: RoomState, session: ExperienceSessi
     blockedReason = session.pending.verifying ? '正在核对操作结果' : '操作确认中'
   } else if (screen === 'waitingRoom') {
     actionMode = myReady ? 'waitingNextHand' : 'ready'
-    blockedReason = myReady ? '已准备，等待其他真人' : null
+    blockedReason = state.startBlockedReason || (myReady ? '已准备，等待房主开始' : null)
   } else if (state.phase === 'settled' || state.phase === 'waiting' || state.phase === 'showdown') {
     actionMode = 'settled'
   } else if (!participationInHand) {
@@ -268,6 +295,14 @@ export function deriveExperienceState(state: RoomState, session: ExperienceSessi
     inHand: participationInHand,
     removalNotice:
       state.viewerStatus === 'removed' ? `${removalText(state.removalReason)}，可返回首页重新加入。` : null,
+    isHost: state.isHost,
+    canStart: state.canStart,
+    startBlockedReason: state.startBlockedReason,
+    targetHumanCount: state.targetHumanCount,
+    humanCount: state.humanCount,
+    botCount: state.botCount,
+    roomKind: state.roomKind,
+    botPolicy: state.botPolicy,
   }
 }
 
@@ -284,8 +319,9 @@ function waitingReason(state: RoomState, legalCount: number): string | null {
 function readinessText(state: RoomState): string {
   const eligible = state.readiness.eligibleSeats.length
   const ready = state.readiness.readySeats.length
-  if (eligible === 0) return '还没有其他真人，准备后自动补齐机器人'
-  return `真人已准备 ${ready}/${eligible}`
+  if (eligible === 0) return '还没有真人入座'
+  const target = state.targetHumanCount > 0 ? state.targetHumanCount : eligible
+  return `真人已准备 ${ready}/${eligible} · 目标 ${Math.max(target, eligible)} 人`
 }
 
 export function removalText(reason: string | null | undefined): string {

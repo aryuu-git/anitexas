@@ -33,6 +33,18 @@ type RoomRecord struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+// 房间类型与开局策略（体验重构第二轮，docs/experience-handoff/05 §3）。
+const (
+	RoomKindFriend   = "friend"
+	RoomKindPractice = "practice"
+
+	BotPolicyOff  = "off"  // 朋友房默认：空座等待朋友，绝不自动补机器人
+	BotPolicyFill = "fill" // 练习房：创建时按座位补齐机器人
+
+	NextHandManual    = "manual"    // 朋友房默认：房主手动开下一手
+	NextHandAutomatic = "automatic" // 练习房可选：服务端排程自动续局
+)
+
 // RoomConfig 是建房配置的持久化形态（rooms.config JSON；与 REST 建房参数同形）。
 type RoomConfig struct {
 	// AutoReveal（D14 两模式合并）：true = 开局全揭示（原 explicit），
@@ -52,6 +64,38 @@ type RoomConfig struct {
 	ChatEnabled bool `json:"chatEnabled"`
 	// ThemeFilter 是主题牌池过滤项（deckStrategy=theme 时携带，frontend-contract §3）。
 	ThemeFilter *ThemeFilter `json:"themeFilter,omitempty"`
+
+	// ===== 第二轮房间策略（缺失字段按朋友房安全默认解释，绝不推导为自动开局）=====
+	RoomKind         string `json:"roomKind"`         // friend | practice
+	BotPolicy        string `json:"botPolicy"`        // off | fill
+	TargetHumanCount int    `json:"targetHumanCount"` // 期望参局人数（含明确添加的机器人）
+	NextHandPolicy   string `json:"nextHandPolicy"`   // manual | automatic
+}
+
+// NormalizeRoomConfig 把旧房间/缺省字段收敛到安全默认：朋友房、机器人关闭、
+// 目标 2 人、手动续局。任何缺失字段都不得被解释成自动补机器人或自动开局。
+func NormalizeRoomConfig(cfg RoomConfig) RoomConfig {
+	if cfg.RoomKind != RoomKindPractice {
+		cfg.RoomKind = RoomKindFriend
+	}
+	if cfg.RoomKind == RoomKindFriend {
+		cfg.BotPolicy = BotPolicyOff
+		cfg.NextHandPolicy = NextHandManual
+	} else {
+		if cfg.BotPolicy != BotPolicyOff {
+			cfg.BotPolicy = BotPolicyFill
+		}
+		if cfg.NextHandPolicy != NextHandAutomatic {
+			cfg.NextHandPolicy = NextHandManual
+		}
+	}
+	if cfg.TargetHumanCount < 2 {
+		cfg.TargetHumanCount = 2
+	}
+	if cfg.Seats > 0 && cfg.TargetHumanCount > cfg.Seats {
+		cfg.TargetHumanCount = cfg.Seats
+	}
+	return cfg
 }
 
 // HandRecord 是 hands 表一行：一手牌的牌池、公共牌与结果（动作日志见 ActionRecord）。

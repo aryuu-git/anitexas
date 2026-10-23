@@ -33,3 +33,12 @@ __pycache__/
 *.env
 *.env.*
 !*.env.example
+
+# 本机验收产物（保留脚本，忽略截图与结果 JSON）
+acceptance/screenshots/
+acceptance/*results.json
+
+# 本机工具数据与凭据（不得提交）
+.syncdata/
+.tmp-*/
+.torrents/

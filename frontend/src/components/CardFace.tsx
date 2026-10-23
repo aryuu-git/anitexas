@@ -286,13 +286,7 @@ export const CardFace = memo(function CardFace({
             )}
           </div>
         )}
-        {state === 'hidden' && (
-          <div className="mt-auto pt-2">
-            <span className="inline-flex whitespace-nowrap rounded-chip border border-gold/15 bg-gold/5 px-2 py-0.5 text-micro text-muted">
-              {interactive ? '点击揭示要素' : '要素未揭示'}
-            </span>
-          </div>
-        )}
+
       </div>
 
       {/* 金箔扫光：高评分牌面（≥8.5）叠加一道光带；reduced-motion 下由全局关闭 */}

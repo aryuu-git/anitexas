@@ -63,7 +63,7 @@ function describe(ev: ExperienceEvent, nickOf: (seat: number | null) => string):
     case 'flop':
     case 'turn':
     case 'river':
-      return STREET_LABELS[ev.kind] ?? '进入下一轮'
+      return `${STREET_LABELS[ev.kind] ?? '下一轮'}开始 · 上一轮下注结束`
     case 'readied':
       return `${nickOf(ev.seat)} 已准备`
     case 'showdown':

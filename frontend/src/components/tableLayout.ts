@@ -7,9 +7,9 @@
 export const TABLE_RX = 43
 export const TABLE_RY = 40
 
-/** 桌容器设计尺寸（宽 × 高，px）。 */
-export const TABLE_W = 1260
-export const TABLE_H = 580
+/** 桌容器设计尺寸（宽 × 高，px）：压到 1366×768 首屏可容纳的桌面比例。 */
+export const TABLE_W = 1120
+export const TABLE_H = 480
 
 /** 座位 index → 相对桌容器的百分比坐标 {x,y}（0–100）；mySeat 恒在正下方（θ=90°）。 */
 export function seatPosition(index: number, mySeat: number, total: number): { x: number; y: number } {

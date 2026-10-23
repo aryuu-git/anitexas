@@ -14,7 +14,7 @@ export function PotStack({ pot, sidePot = 0 }: PotStackProps) {
     <div className="flex items-end gap-3" data-testid="pot-stack">
       <ChipStack amount={pot} size={18} maxLayers={5} showAmount={false} />
       <div className="flex flex-col items-start leading-none">
-        <span className="text-kicker text-gold-foil">POT</span>
+        <span className="text-kicker text-gold-foil">底池</span>
         <span
           key={pot}
           className="animate-chip-pop font-serif text-score text-gold"

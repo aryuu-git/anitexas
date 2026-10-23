@@ -61,8 +61,9 @@ afterEach(cleanup)
 
 /** 数字输入（aria-label 命名） */
 const numberInput = (name: string) => screen.getByRole('spinbutton', { name }) as HTMLInputElement
-/** 打开建房配置 */
-const openCreate = () => fireEvent.click(screen.getByRole('button', { name: '选择规则并建房' }))
+/** 打开建房配置（朋友房 / 练习房） */
+const openCreate = (kind: 'friend' | 'practice' = 'friend') =>
+  fireEvent.click(screen.getByTestId(kind === 'practice' ? 'start-practice' : 'start-friend'))
 /** 输入昵称 */
 const typeNick = (value: string) => fireEvent.change(screen.getByLabelText(NICK_INPUT), { target: { value } })
 
@@ -70,7 +71,7 @@ describe('LobbyPage 昵称', () => {
   it('建房/加入共用昵称；昵称为空时聚焦字段并提示', () => {
     render(<LobbyPage />)
     openCreate()
-    fireEvent.click(screen.getByRole('button', { name: '创建并进入准备室' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建房间' }))
     expect(screen.getByTestId('nick-error').textContent).toBe('请先填写昵称')
     expect(document.activeElement).toBe(screen.getByLabelText(NICK_INPUT))
   })
@@ -79,7 +80,7 @@ describe('LobbyPage 昵称', () => {
     render(<LobbyPage />)
     typeNick('一二三四五六七八九十一二三')
     openCreate()
-    fireEvent.click(screen.getByRole('button', { name: '创建并进入准备室' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建房间' }))
     expect(screen.getByTestId('nick-error').textContent).toContain('最长 12 个字')
   })
 
@@ -93,44 +94,32 @@ describe('LobbyPage 昵称', () => {
     render(<LobbyPage />)
     typeNick('  小樱  ')
     openCreate()
-    fireEvent.click(screen.getByRole('button', { name: '创建并进入准备室' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建房间' }))
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/room/NEW001', expect.anything()))
     expect(window.localStorage.getItem('anitexas:nick')).toBe('小樱')
-    expect(vi.mocked(createRoom).mock.calls[0][0].nick).toBe('小樱')
+    expect(vi.mocked(createRoom).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ nick: '小樱', roomKind: 'friend', botPolicy: 'off', nextHandPolicy: 'manual' }),
+    )
   })
 })
 
-describe('LobbyPage 预设与自定义', () => {
-  it('默认新手体验（4 座 / 1·2 / 自动展开），摘要与预设选中态一致', () => {
+describe('LobbyPage 房间类型与摘要', () => {
+  it('朋友房默认机器人关闭、手动开始，摘要与提交配置一致', () => {
     render(<LobbyPage />)
-    openCreate()
-    expect(screen.getByTestId('preset-beginner').getAttribute('aria-checked')).toBe('true')
+    openCreate('friend')
     expect(numberInput('座位数').value).toBe('4')
-    expect(screen.getByText(/新手体验 · 4 人桌/)).toBeTruthy()
+    expect(numberInput('期望参局人数').value).toBe('2')
+    expect(screen.getByTestId('create-summary').textContent).toContain('朋友房 · 4 座')
+    expect(screen.getByTestId('create-summary').textContent).toContain('机器人关闭')
+    expect(screen.getByTestId('create-summary').textContent).toContain('房主手动开始')
   })
 
-  it('切换到动画挑战套用 6 座 / 5·10 / 手动展开', () => {
+  it('练习房显示机器人数量，并可明示选择自动续局', () => {
     render(<LobbyPage />)
-    openCreate()
-    fireEvent.click(screen.getByTestId('preset-challenge'))
-    expect(screen.getByTestId('preset-challenge').getAttribute('aria-checked')).toBe('true')
-    expect(numberInput('座位数').value).toBe('6')
-    fireEvent.click(screen.getByTestId('advanced-toggle'))
-    expect(numberInput('小盲').value).toBe('5')
-    expect(numberInput('大盲').value).toBe('10')
-    expect(screen.getByRole('switch', { name: /开局自动展开要素/ }).getAttribute('aria-checked')).toBe('false')
-    expect(screen.getByText(/动画挑战 · 6 人桌/)).toBeTruthy()
-  })
-
-  it('微调受控字段后显示自定义；重新点预设恢复选中态', () => {
-    render(<LobbyPage />)
-    openCreate()
-    fireEvent.click(screen.getByTestId('advanced-toggle'))
-    fireEvent.change(numberInput('小盲'), { target: { value: '3' } })
-    expect(screen.getByTestId('preset-custom')).toBeTruthy()
-    fireEvent.click(screen.getByTestId('preset-beginner'))
-    expect(screen.queryByTestId('preset-custom')).toBeNull()
-    expect(screen.getByTestId('preset-beginner').getAttribute('aria-checked')).toBe('true')
+    openCreate('practice')
+    expect(screen.getByTestId('create-summary').textContent).toContain('机器人 3 位')
+    fireEvent.click(screen.getByRole('button', { name: '自动续局' }))
+    expect(screen.getByTestId('create-summary').textContent).toContain('自动续局')
   })
 
   it('返回入口不清空昵称', () => {

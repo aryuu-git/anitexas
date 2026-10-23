@@ -13,15 +13,21 @@ import (
 // WS 消息类型名（§5 上行/下行清单，逐字对齐；resync 为前端扩展，语义见各处注释）。
 const (
 	// 上行（client -> server）
-	TypeJoin   = "join"
-	TypeReady  = "ready"
-	TypeAction = "action"
-	TypeReveal = "reveal"
-	TypeLeave  = "leave"
-	TypePing   = "ping"
-	TypeResync = "resync" // 断线重连后请求快照修复（前端 types.ts 扩展）
-	TypeEmote  = "emote"  // 表情（D15 互动扩展）：key 8 选 1，10 秒/座位冷却
-	TypeSay    = "say"    // 聊天上行（与 emote 同构）：text ≤ ChatMaxLen，节流 ChatThrottleMs
+	TypeJoin        = "join"
+	TypeReady       = "ready"
+	TypeCancelReady = "cancelReady"    // 取消准备（服务端命令，须广播）
+	TypeStart       = "start"          // 房主显式开始第一手/下一手（唯一开局入口）
+	TypeAddBot      = "addBot"         // 房主显式添加机器人（朋友房默认关闭）
+	TypeRemoveBot   = "removeBot"      // 房主移除等待阶段机器人
+	TypeSetTarget   = "setTarget"      // 房主明确调整期望参局人数
+	TypeNextPolicy  = "nextHandPolicy" // 练习房切换手动/自动续局
+	TypeAction      = "action"
+	TypeReveal      = "reveal"
+	TypeLeave       = "leave"
+	TypePing        = "ping"
+	TypeResync      = "resync" // 断线重连后请求快照修复（前端 types.ts 扩展）
+	TypeEmote       = "emote"  // 表情（D15 互动扩展）：key 8 选 1，10 秒/座位冷却
+	TypeSay         = "say"    // 聊天上行（与 emote 同构）：text ≤ ChatMaxLen，节流 ChatThrottleMs
 
 	// 下行（server -> client）
 	TypeState      = "state" // v2 权威状态帧（protocolVersion=2）
@@ -205,6 +211,42 @@ type RevealPayload struct {
 // LeavePayload 是离座（v2 带命令元数据）。
 type LeavePayload struct {
 	CommandMeta
+}
+
+// StartPayload 是房主显式开局命令。TargetHumanCount 非空表示本次同时明确调整
+// 参局人数目标（“以当前人数开始”必须由房主显式提交，服务端不静默缩减）。
+type StartPayload struct {
+	CommandMeta
+	TargetHumanCount *int `json:"targetHumanCount,omitempty"`
+}
+
+// CancelReadyPayload 是取消准备命令（服务端确认后才算取消）。
+type CancelReadyPayload struct {
+	CommandMeta
+}
+
+// AddBotPayload 是房主添加机器人命令；Seat 缺省时取第一个空座。
+type AddBotPayload struct {
+	CommandMeta
+	Seat *int `json:"seat,omitempty"`
+}
+
+// RemoveBotPayload 是房主移除机器人命令。
+type RemoveBotPayload struct {
+	CommandMeta
+	Seat int `json:"seat"`
+}
+
+// SetTargetPayload 是房主调整期望参局人数命令。
+type SetTargetPayload struct {
+	CommandMeta
+	TargetHumanCount int `json:"targetHumanCount"`
+}
+
+// NextPolicyPayload 是练习房续局策略切换命令。
+type NextPolicyPayload struct {
+	CommandMeta
+	Policy string `json:"policy"` // manual | automatic
 }
 
 // PingPayload 是心跳（空载荷）。
@@ -410,6 +452,17 @@ type SnapshotPayload struct {
 	LastResult *HandResult `json:"lastResult"`
 	// RecentEvents 是按视角过滤的有限过程历史（刷新恢复文字记录用）。
 	RecentEvents []ExperienceEvent `json:"recentEvents"`
+
+	// ===== 第二轮房间策略（服务端派生，客户端不得自行猜测开局权限）=====
+	RoomKind           string `json:"roomKind"`           // friend | practice
+	BotPolicy          string `json:"botPolicy"`          // off | fill
+	TargetHumanCount   int    `json:"targetHumanCount"`   // 期望参局人数
+	HostSeat           int    `json:"hostSeat"`           // 房主座位（-1 = 尚无房主）
+	IsHost             bool   `json:"isHost"`             // 接收者是否房主（服务端身份判定）
+	CanStart           bool   `json:"canStart"`           // 房主现在能否开始
+	StartBlockedReason string `json:"startBlockedReason"` // canStart=false 时的实际原因
+	HumanCount         int    `json:"humanCount"`
+	BotCount           int    `json:"botCount"`
 }
 
 // Readiness 是开局准备度（排除 bot/空座/明确离席者）。

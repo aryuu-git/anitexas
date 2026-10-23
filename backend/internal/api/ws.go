@@ -173,6 +173,54 @@ func (d Deps) dispatch(c *wsClient, env model.Envelope) {
 			return
 		}
 
+	case model.TypeCancelReady:
+		var p model.CancelReadyPayload
+		if err := env.Decode(&p); err != nil {
+			c.room.SendError(c.seat, "bad_cancel_ready", "cancelReady 载荷不合法")
+			return
+		}
+		_ = c.room.CancelReadyWithMeta(c.seat, p.CommandMeta)
+
+	case model.TypeStart:
+		var p model.StartPayload
+		if err := env.Decode(&p); err != nil {
+			c.room.SendError(c.seat, "bad_start", "start 载荷不合法")
+			return
+		}
+		_ = c.room.StartGame(c.seat, p)
+
+	case model.TypeAddBot:
+		var p model.AddBotPayload
+		if err := env.Decode(&p); err != nil {
+			c.room.SendError(c.seat, "bad_add_bot", "addBot 载荷不合法")
+			return
+		}
+		_ = c.room.AddBot(c.seat, p)
+
+	case model.TypeRemoveBot:
+		var p model.RemoveBotPayload
+		if err := env.Decode(&p); err != nil {
+			c.room.SendError(c.seat, "bad_remove_bot", "removeBot 载荷不合法")
+			return
+		}
+		_ = c.room.RemoveBot(c.seat, p)
+
+	case model.TypeSetTarget:
+		var p model.SetTargetPayload
+		if err := env.Decode(&p); err != nil {
+			c.room.SendError(c.seat, "bad_set_target", "setTarget 载荷不合法")
+			return
+		}
+		_ = c.room.SetTarget(c.seat, p)
+
+	case model.TypeNextPolicy:
+		var p model.NextPolicyPayload
+		if err := env.Decode(&p); err != nil {
+			c.room.SendError(c.seat, "bad_next_policy", "nextHandPolicy 载荷不合法")
+			return
+		}
+		_ = c.room.SetNextHandPolicy(c.seat, p)
+
 	case model.TypeAction:
 		var p model.ActionPayload
 		if err := env.Decode(&p); err != nil {

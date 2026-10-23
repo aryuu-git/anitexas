@@ -131,6 +131,7 @@ export function ResultPanel({
   }, [onClose])
 
   const nickOf = (seat: number) => seats.find((s) => s.seat === seat)?.nick ?? `座位 ${seat}`
+  const foldedOf = (seat: number) => seats.find((s) => s.seat === seat)?.folded ?? false
   const wonBy = (seat: number) => settled.potWins[seat] ?? 0
 
   return (
@@ -285,6 +286,7 @@ export function ResultPanel({
                     <td className="px-3 py-2.5 text-gold-light">
                       {nickOf(r.seat)}
                       {r.seat === mySeat && <span className="ml-1 text-micro text-muted">（你）</span>}
+                      {foldedOf(r.seat) && <span className="ml-1 text-micro text-muted">（已弃牌）</span>}
                     </td>
                     <td className={`px-3 py-2.5 font-serif ${r.chipsDelta >= 0 ? 'text-success' : 'text-danger'}`}>
                       {r.chipsDelta >= 0 ? `+${r.chipsDelta}` : r.chipsDelta}

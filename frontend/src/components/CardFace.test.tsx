@@ -21,8 +21,8 @@ describe('CardFace 三态渲染', () => {
     // 要素芯片不得出现（隐藏数据纪律 D7 的 UI 侧）
     expect(screen.queryByText(/监督/)).toBeNull()
     expect(screen.queryByText(/新海诚/)).toBeNull()
-    // 未揭示占位提示
-    expect(container.textContent).toContain('要素未揭示')
+    // 隐藏态不渲染任何要素/占位文案，保持卡片紧凑
+    expect(container.textContent).not.toContain('要素未揭示')
   })
 
   it('revealed：要素 chips 全量可见，成组要素芯片描金标记', () => {

@@ -26,6 +26,8 @@ func newStateRoom(t *testing.T, seats int, timing Timing) (*Room, *obsLink) {
 	cfg := model.RoomConfig{
 		Seats: seats, SmallBlind: 1, BigBlind: 2, Chips: 200, DeckSize: 20,
 		DeckStrategy: "stratified", ChatEnabled: true,
+		RoomKind: model.RoomKindPractice, BotPolicy: model.BotPolicyFill,
+		TargetHumanCount: 2, NextHandPolicy: model.NextHandManual,
 	}
 	r := NewRoom("room-state", "STA001", "harness", cfg, 30, calmBotParams(3),
 		synthLibrary(500), st, nil, timing)
@@ -66,6 +68,11 @@ func TestStateFrameOpening(t *testing.T) {
 
 	if err := r.ReadyWithMeta(0, model.CommandMeta{ProtocolVersion: 2, RequestID: "req-ready-1"}); err != nil {
 		t.Fatalf("准备: %v", err)
+	}
+	if err := r.StartGame(0, model.StartPayload{CommandMeta: model.CommandMeta{
+		ProtocolVersion: 2, RequestID: "req-start-1",
+	}}); err != nil {
+		t.Fatalf("房主开始: %v", err)
 	}
 	var frame model.StateFrame
 	deadline := time.After(3 * time.Second)
@@ -118,9 +125,7 @@ func TestStateFrameOpening(t *testing.T) {
 // 每次本人回合按 legalActions 行动，最终帧必须带 lastResult（结算可得）+ 回到 waiting。
 func TestStateFrameProgressionAndResult(t *testing.T) {
 	r, obs := newStateRoom(t, 2, Timing{NextHandDelay: 10 * time.Second})
-	if err := r.Ready(0); err != nil {
-		t.Fatalf("准备: %v", err)
-	}
+	readyAndStart(t, r, 0)
 
 	deadline := time.After(15 * time.Second)
 	lastRev := int64(0)
@@ -184,9 +189,7 @@ func TestStateFrameProgressionAndResult(t *testing.T) {
 // TestCommandMetaRejectsStaleAndDedupes 校验 stale_state 与 requestId 去重。
 func TestCommandMetaRejectsStaleAndDedupes(t *testing.T) {
 	r, obs := newStateRoom(t, 2, Timing{})
-	if err := r.Ready(0); err != nil {
-		t.Fatalf("准备: %v", err)
-	}
+	readyAndStart(t, r, 0)
 	// 等待 preflop 帧，记录 revision
 	var frame model.StateFrame
 	for frame.State.Phase != model.PhasePreflop {

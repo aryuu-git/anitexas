@@ -24,6 +24,8 @@ import { useTableSweep } from '../../hooks/useTableSweep'
 export interface PokerTableProps {
   seats: SeatState[]
   mySeat: number
+  /** 服务端确认的房主座位（-1 = 无房主） */
+  hostSeat?: number
   turnSeat: number
   emotes: Record<number, EmoteTick>
   /** 座位 → 亮出的牌型名（摊牌后） */
@@ -55,6 +57,7 @@ export interface PokerTableProps {
 export const PokerTable = memo(function PokerTable({
   seats,
   mySeat,
+  hostSeat = -1,
   turnSeat,
   emotes,
   tierNameOf,
@@ -114,6 +117,9 @@ export const PokerTable = memo(function PokerTable({
           <span>
             当前注 <span className="font-serif text-body text-gold-light">{currentBet}</span>
           </span>
+          <span>
+            公共牌 <span className="font-serif text-body text-gold-light">{community.length}</span>/5
+          </span>
           {revealCount > 0 && <span>已揭示 {revealCount}</span>}
         </div>
         <CommunityRow
@@ -144,6 +150,7 @@ export const PokerTable = memo(function PokerTable({
                 seat={s}
                 isTurn={s.seat === turnSeat}
                 isMe={s.seat === mySeat}
+                isHost={s.seat === hostSeat}
                 facing={facing}
                 tierName={tierNameOf(s.seat)}
                 emote={emotes[s.seat]}

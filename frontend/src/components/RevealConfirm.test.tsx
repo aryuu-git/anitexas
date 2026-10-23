@@ -39,7 +39,7 @@ function Harness({ onConfirm = noop, onCancel = noop }: { onConfirm?: () => void
 }
 
 describe('RevealConfirm 揭示确认弹层', () => {
-  it('role=dialog + aria-modal；scope=private 三行文案：仅自己可见 / 不可撤销 / 揭示成本', () => {
+  it('role=dialog + aria-modal；scope=private 三行文案：仅自己可见 / 不可撤销 / 免费查看', () => {
     render(
       <RevealConfirm card={C101_KIMINONAWA} scope="private" revealRate={0} onConfirm={noop} onCancel={noop} />,
     )
@@ -48,7 +48,8 @@ describe('RevealConfirm 揭示确认弹层', () => {
     expect(dialog.getAttribute('aria-label')).toBe('私看确认')
     expect(dialog.textContent).toContain('仅自己可见')
     expect(dialog.textContent).toContain('不可撤销')
-    expect(dialog.textContent).toContain('揭示成本')
+    expect(dialog.textContent).toContain('免费查看')
+    expect(dialog.textContent).toContain('本次查看不扣积分')
     expect(screen.getByRole('button', { name: '确认私看' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '取消' })).toBeTruthy()
     // 私看不得出现全桌文案
